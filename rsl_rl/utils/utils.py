@@ -12,6 +12,18 @@ import pathlib
 import torch
 from typing import Callable
 
+def squeeze_preserve_batch(tensor):
+    """Squeezes a tensor, but preserves the batch dimension"""
+    single_batch = tensor.shape[0] == 1
+
+    squeezed_tensor = tensor.squeeze()
+
+    if single_batch:
+        squeezed_tensor = squeezed_tensor.unsqueeze(0)
+
+    return squeezed_tensor
+
+
 
 def resolve_nn_activation(act_name: str) -> torch.nn.Module:
     if act_name == "elu":

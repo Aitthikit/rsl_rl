@@ -261,6 +261,9 @@ class PPO:
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             # -- critic
             value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
+            # print(f"Critic MLP output: {critic_obs_batch.shape}")
+            # value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch)
+            # print(f"Critic MLP output: {value_batch.shape}")
             # -- entropy
             # we only keep the entropy of the first augmentation (the original one)
             mu_batch = self.policy.action_mean[:original_batch_size]
@@ -314,6 +317,7 @@ class PPO:
 
             # Value function loss
             if self.use_clipped_value_loss:
+                # print(target_values_batch.shape, value_batch.shape)
                 value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
                     -self.clip_param, self.clip_param
                 )

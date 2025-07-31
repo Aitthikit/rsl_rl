@@ -12,7 +12,7 @@ import torch
 from collections import deque
 
 import rsl_rl
-from rsl_rl.algorithms import PPO, Distillation
+from rsl_rl.algorithms import PPO, Distillation , DPPO
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import (
     ActorCritic,
@@ -20,6 +20,7 @@ from rsl_rl.modules import (
     EmpiricalNormalization,
     StudentTeacher,
     StudentTeacherRecurrent,
+    Quantile_NN
 )
 from rsl_rl.utils import store_code_state
 
@@ -42,6 +43,8 @@ class OnPolicyRunner:
             self.training_type = "rl"
         elif self.alg_cfg["class_name"] == "Distillation":
             self.training_type = "distillation"
+        elif self.alg_cfg["class_name"] == "DPPO":
+            self.training_type = "dppo"
         else:
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
 
@@ -60,6 +63,11 @@ class OnPolicyRunner:
                 self.privileged_obs_type = "teacher"  # policy distillation
             else:
                 self.privileged_obs_type = None
+        if self.training_type == "dppo":
+            if "critic" in extras["observations"]:
+                self.privileged_obs_type = "critic"  # distribution actor-critic reinforcement learnig, e.g., DPPO
+            else:
+                self.privileged_obs_type = None
 
         # resolve dimensions of privileged observations
         if self.privileged_obs_type is not None:
@@ -69,7 +77,7 @@ class OnPolicyRunner:
 
         # evaluate the policy class
         policy_class = eval(self.policy_cfg.pop("class_name"))
-        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent = policy_class(
+        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent | Quantile_NN = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 
@@ -93,7 +101,7 @@ class OnPolicyRunner:
 
         # initialize algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))
-        self.alg: PPO | Distillation = alg_class(
+        self.alg: PPO | Distillation | DPPO = alg_class(
             policy, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg
         )
 
@@ -200,6 +208,11 @@ class OnPolicyRunner:
             # Rollout
             with torch.inference_mode():
                 for _ in range(self.num_steps_per_env):
+                    # Implement conventional Network & GRU for adaptation module here
+                    #######################################
+
+
+                    #######################################
                     # Sample actions
                     actions = self.alg.act(obs, privileged_obs)
                     # Step the environment
