@@ -62,60 +62,60 @@ def make_distorted_measure(distorted_tau: torch.Tensor) -> Callable:
     return distorted_measure
 
 
-def risk_measure_cvar(qn: Network, confidence_level: float = 1.0) -> Callable:
-    """Conditional value at risk measure.
+# def risk_measure_cvar(qn: Network, confidence_level: float = 1.0) -> Callable:
+#     """Conditional value at risk measure.
 
-    TODO: Handle confidence_level being a tensor.
+#     TODO: Handle confidence_level being a tensor.
 
-    Args:
-        qn (QuantileNetwork): Quantile network to compute the risk measure for.
-        confidence_level (float): Confidence level of the risk measure. Must be between 0 and 1.
-    Returns:
-        A risk measure function.
-    """
-    tau, confidence_level = reshape_measure_parameters(qn, confidence_level)
-    distorted_tau = torch.min(tau / confidence_level, torch.ones(*tau.shape).to(tau.device))
+#     Args:
+#         qn (QuantileNetwork): Quantile network to compute the risk measure for.
+#         confidence_level (float): Confidence level of the risk measure. Must be between 0 and 1.
+#     Returns:
+#         A risk measure function.
+#     """
+#     tau, confidence_level = reshape_measure_parameters(qn, confidence_level)
+#     distorted_tau = torch.min(tau / confidence_level, torch.ones(*tau.shape).to(tau.device))
 
-    return make_distorted_measure(distorted_tau)
-
-
-def risk_measure_neutral(_: Network) -> Callable:
-    """Neutral risk measure (expected value).
-
-    Args:
-        _ (QuantileNetwork): Quantile network to compute the risk measure for.
-    Returns:
-        A risk measure function.
-    """
-
-    def measure(quantiles):
-        values = squeeze_preserve_batch(quantiles.mean(-1))
-
-        return values
-
-    return measure
+#     return make_distorted_measure(distorted_tau)
 
 
-def risk_measure_percentile(_: Network, confidence_level: float = 1.0) -> Callable:
-    """Value at risk measure.
+# def risk_measure_neutral(_: Network) -> Callable:
+#     """Neutral risk measure (expected value).
 
-    Args:
-        _ (QuantileNetwork): Quantile network to compute the risk measure for.
-        confidence_level (float): Confidence level of the risk measure. Must be between 0 and 1.
-    Returns:
-        A risk measure function.
-    """
+#     Args:
+#         _ (QuantileNetwork): Quantile network to compute the risk measure for.
+#     Returns:
+#         A risk measure function.
+#     """
 
-    def measure(quantiles):
-        sorted_quantiles, _ = quantiles.sort(-1)
-        sorted_quantiles = sorted_quantiles.reshape(-1, sorted_quantiles.shape[-1])
-        idx = min(int(confidence_level * quantiles.shape[-1]), quantiles.shape[-1] - 1)
+#     def measure(quantiles):
+#         values = squeeze_preserve_batch(quantiles.mean(-1))
 
-        values = squeeze_preserve_batch(sorted_quantiles[:, idx])
+#         return values
 
-        return values
+#     return measure
 
-    return measure
+
+# def risk_measure_percentile(_: Network, confidence_level: float = 1.0) -> Callable:
+#     """Value at risk measure.
+
+#     Args:
+#         _ (QuantileNetwork): Quantile network to compute the risk measure for.
+#         confidence_level (float): Confidence level of the risk measure. Must be between 0 and 1.
+#     Returns:
+#         A risk measure function.
+#     """
+
+#     def measure(quantiles):
+#         sorted_quantiles, _ = quantiles.sort(-1)
+#         sorted_quantiles = sorted_quantiles.reshape(-1, sorted_quantiles.shape[-1])
+#         idx = min(int(confidence_level * quantiles.shape[-1]), quantiles.shape[-1] - 1)
+
+#         values = squeeze_preserve_batch(sorted_quantiles[:, idx])
+
+#         return values
+
+   # return measure
 
 
 def risk_measure_wang(qn: Network, beta: Union[float, torch.Tensor] = 0.0) -> Callable:

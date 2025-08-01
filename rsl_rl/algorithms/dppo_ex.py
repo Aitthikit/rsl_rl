@@ -24,7 +24,7 @@ class DPPO(PPO):
     value target computation, as described by Nam et. al. in https://arxiv.org/pdf/2105.11366.pdf.
     """
 
-    critic_network: Type[nn.Module] = QuantileNetwork
+    critic_network: Type[nn.Module] = QuantileNetwork # set default to QuantileNetwork
     _alg_features = dict(recurrent=True)
 
     value_loss_energy = "sample_energy"
@@ -85,16 +85,16 @@ class DPPO(PPO):
                 measure.
             value_measure_kwargs (Dict): The keyword arguments to pass to the value measure.
         """
-        self._register_critic_network_kwargs(measure=value_measure, measure_kwargs=value_measure_kwargs)
+        self._register_critic_network_kwargs(measure=value_measure, measure_kwargs=value_measure_kwargs) # set configurable for critic
 
         self._critic_network_name = critic_network
-        self.critic_network = self.networks[self._critic_network_name]
+        self.critic_network = self.networks[self._critic_network_name] # self.critic_network = QuantileNetwork
         if self._critic_network_name == self.network_qrdqn:
             self._register_critic_network_kwargs(quantile_count=qrdqn_quantile_count)
         elif self._critic_network_name == self.network_iqn:
             self._register_critic_network_kwargs(feature_layers=iqn_feature_layers, embedding_size=iqn_embedding_size)
 
-        kwargs["critic_activations"] = critic_activations
+        kwargs["critic_activations"] = critic_activations # Network construction
 
         if value_measure_adaptation is not None:
             # Value measure adaptation observations are not passed to the critic network.
@@ -105,14 +105,14 @@ class DPPO(PPO):
         super().__init__(env, **kwargs)
 
         self._value_lambda = value_lambda
-        self._value_loss_name = value_loss
+        self._value_loss_name = value_loss # set value loss name (energy, l1, huber)
         self._register_serializable("_value_lambda", "_value_loss_name")
 
         assert (
             self._value_loss_name in self.values_losses[self._critic_network_name]
         ), f"Value loss '{self._value_loss_name}' is not supported for network '{self._critic_network_name}'."
         value_loss_func = self.values_losses[critic_network][self._value_loss_name]
-        self._value_loss = lambda *args, **kwargs: value_loss_func(self.critic, *args, **kwargs)
+        self._value_loss = lambda *args, **kwargs: value_loss_func(self.critic, *args, **kwargs) # set value loss function
 
         if value_loss == self.value_loss_energy:
             value_loss_kwargs["sample_count"] = (
@@ -130,14 +130,14 @@ class DPPO(PPO):
             self._iqn_value_samples = iqn_value_samples
             self._register_serializable("_iqn_action_samples", "_iqn_value_samples")
 
-    def _critic_input(self, observations, actions=None) -> torch.Tensor:
+    def _critic_input(self, observations, actions=None) -> torch.Tensor: #change form base class function
         mask, shape = self._get_critic_obs_mask(observations)
 
         processed_observations = observations[mask].reshape(*shape)
 
         return processed_observations
 
-    def _get_critic_obs_mask(self, observations):
+    def _get_critic_obs_mask(self, observations): #new function
         mask = torch.ones_like(observations).bool()
 
         if self._value_measure_adaptation is not None:
@@ -147,7 +147,7 @@ class DPPO(PPO):
 
         return mask, shape
 
-    def _process_quants(self, x):
+    def _process_quants(self, x): # new function
         if self._value_loss_name == self.value_loss_energy:
             quants, idx = QuantileDistribution(x).sample(self._value_loss_kwargs["sample_count"])
         else:
@@ -156,7 +156,7 @@ class DPPO(PPO):
         return quants, idx
 
     @Benchmarkable.register
-    def process_transition(self, *args) -> Dict[str, torch.Tensor]:
+    def process_transition(self, *args) -> Dict[str, torch.Tensor]: # change form base class function
         transition = super(PPO, self).process_transition(*args)
 
         if self.recurrent:
@@ -200,7 +200,7 @@ class DPPO(PPO):
         return transition
 
     @Benchmarkable.register
-    def _compute_value_loss(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _compute_value_loss(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor: #change form base class function at value loss calculation
         critic_kwargs = (
             {"sample_count": self._iqn_value_samples, "taus": batch["value_target_taus"], "use_measure": False}
             if self._critic_network_name == self.network_iqn
@@ -239,7 +239,7 @@ class DPPO(PPO):
         return measure_adaptations
 
     @Benchmarkable.register
-    def _process_dataset(self, dataset: Dataset) -> Dataset:
+    def _process_dataset(self, dataset: Dataset) -> Dataset: #change form base class function at
         rewards = torch.stack([entry["rewards"] for entry in dataset])
         dones = torch.stack([entry["dones"] for entry in dataset]).float()
         timeouts = torch.stack([entry["timeouts"] for entry in dataset])
