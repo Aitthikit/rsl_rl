@@ -11,8 +11,8 @@ from .normalizer import EmpiricalNormalization
 from .rnd import RandomNetworkDistillation
 from .student_teacher import StudentTeacher
 from .student_teacher_recurrent import StudentTeacherRecurrent
-from .quantile_network import QuantileNetwork
-from .implicit_quantile_network import ImplicitQuantileNetwork
+# from .quantile_network import QuantileNetwork
+# from .implicit_quantile_network import ImplicitQuantileNetwork
 from .quantile_nn import Quantile_NN
 
 __all__ = [

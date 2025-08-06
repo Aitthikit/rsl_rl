@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from rsl_rl.networks import Memory
 from torch.distributions import Normal
-from typing import List
+from typing import List,Union,Tuple
 
 from rsl_rl.utils import resolve_nn_activation
 
@@ -31,7 +31,7 @@ def squeeze_preserve_batch(tensor):
 
 
 def reshape_measure_parameters(
-    qn: Network, *params: Union[torch.Tensor, float]
+    qn: QuantileCritic, *params: Union[torch.Tensor, float]
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
     """Reshapes the parameters of a measure function to match the shape of the quantile network.
 
@@ -81,7 +81,7 @@ def make_distorted_measure(distorted_tau: torch.Tensor) -> Callable:
 
     return distorted_measure
 
-def risk_measure_wang(qn: Network, beta: Union[float, torch.Tensor] = 0.0) -> Callable:
+def risk_measure_wang(qn: QuantileCritic, beta: Union[float, torch.Tensor] = 0.0) -> Callable:
     """Wang's risk measure.
 
     The risk measure computes the distorted expectation under Wang's risk distortion function
@@ -133,7 +133,7 @@ class QuantileCritic(nn.Module):
             hidden_dims=[256, 256, 256],
             quantile_count=200,
             recurrent_layers=1,
-            activations=[nn.ReLU, nn.ReLU, nn.ReLU, nn.Tanh],
+            activations=[nn.ReLU, nn.ReLU, nn.ReLU],
             init_fade=False,
             init_gain=0.5,
             measure_kwargs={},
@@ -150,7 +150,7 @@ class QuantileCritic(nn.Module):
         self._normalization = nn.Identity()
 
         dims = [input_dim] + hidden_dims + [output_dim]
-
+        self._recurrent = True
         self.hidden_state = None
         self._last_hidden_state = None
         recurrent_kwargs = dict()
@@ -185,7 +185,7 @@ class QuantileCritic(nn.Module):
         self._tau_hat = torch.tensor([(self._tau[i] + self._tau[i + 1]) / 2 for i in range(self._quantile_count)])
         self._tau_hat_mat = torch.empty((0,))
 
-        self._quantile_layers = nn.ModuleList([nn.Linear(hidden_dims[-1], quantile_count) for _ in range(output_size)])
+        self._quantile_layers = nn.ModuleList([nn.Linear(hidden_dims[-1], quantile_count) for _ in range(output_dim)])
 
         self._init(self._quantile_layers, fade=init_fade, gain=init_gain)
 
@@ -401,7 +401,7 @@ class Quantile_NN(nn.Module):
             hidden_dims=critic_hidden_dims,
             quantile_count=quantile_count,
             recurrent_layers=rnn_num_layers,
-            activations=[activation] * len(critic_hidden_dims) + [nn.Tanh],
+            activations=[activation] * len(critic_hidden_dims),
             init_fade=False,
             init_gain=0.5,
             measure_kwargs=measure_kwargs,
@@ -498,8 +498,8 @@ class Quantile_NN(nn.Module):
         return self.act_inference_b(input_a.squeeze(0))
 
 
-    def evaluate(self, critic_observations, **kwargs):
-        value = self.critic(critic_observations)
+    def evaluate(self, critic_observations, hidden_state=None, **kwargs):
+        value = self.critic(critic_observations,hidden_state)
         # print(f"Critic MLP output: {value.shape}")
         return value
 
@@ -529,4 +529,4 @@ class Quantile_NN(nn.Module):
         return True
     
     def get_hidden_states(self):
-        return self.memory_a.hidden_states,None
+        return self.memory_a.hidden_states,self.critic.hidden_state
