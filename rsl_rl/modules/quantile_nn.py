@@ -529,4 +529,4 @@ class Quantile_NN(nn.Module):
         return True
     
     def get_hidden_states(self):
-        return self.memory_a.hidden_states,self.critic.hidden_state
+        return self.memory_a.hidden_states,None#self.critic.hidden_state

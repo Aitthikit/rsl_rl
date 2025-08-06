@@ -40,28 +40,28 @@ class TestQuantileNN:
         # Reset network state
         self.network.reset()
     
-    # def test_initialization(self):
-    #     """Test proper initialization of Quantile_NN"""
-    #     assert self.network.is_recurrent == True
-    #     assert isinstance(self.network.actor, nn.Sequential)
-    #     assert hasattr(self.network, 'critic')
-    #     assert hasattr(self.network, 'memory_a')
+    def test_initialization(self):
+        """Test proper initialization of Quantile_NN"""
+        assert self.network.is_recurrent == True
+        assert isinstance(self.network.actor, nn.Sequential)
+        assert hasattr(self.network, 'critic')
+        assert hasattr(self.network, 'memory_a')
         
-    #     # Check noise std initialization
-    #     if self.network.noise_std_type == "scalar":
-    #         assert hasattr(self.network, 'std')
-    #         assert self.network.std.shape == torch.Size([self.num_actions])
-    #     elif self.network.noise_std_type == "log":
-    #         assert hasattr(self.network, 'log_std')
+        # Check noise std initialization
+        if self.network.noise_std_type == "scalar":
+            assert hasattr(self.network, 'std')
+            assert self.network.std.shape == torch.Size([self.num_actions])
+        elif self.network.noise_std_type == "log":
+            assert hasattr(self.network, 'log_std')
     
-    # def test_actor_forward(self):
-    #     """Test actor forward pass"""
-    #     # Prepare input through memory
-    #     rnn_output = self.network.memory_a(self.actor_obs)
-    #     actor_output = self.network.actor(rnn_output.squeeze(0))
+    def test_actor_forward(self):
+        """Test actor forward pass"""
+        # Prepare input through memory
+        rnn_output = self.network.memory_a(self.actor_obs)
+        actor_output = self.network.actor(rnn_output.squeeze(0))
         
-    #     assert actor_output.shape == (self.batch_size, self.num_actions)
-    #     assert torch.isfinite(actor_output).all()
+        assert actor_output.shape == (self.batch_size, self.num_actions)
+        assert torch.isfinite(actor_output).all()
     
     def test_critic_forward_values(self):
         """Test critic forward pass returning values"""
@@ -75,6 +75,7 @@ class TestQuantileNN:
     
     def test_critic_forward_quantiles(self):
         """Test critic forward pass returning quantile distributions"""
+        self.network.reset()
         self.network.critic.reset_full_hidden_state(self.batch_size)
         
         quantiles = self.network.evaluate_quantiles(self.critic_obs)
@@ -84,64 +85,64 @@ class TestQuantileNN:
         assert quantiles.shape == expected_shape, f"Expected {expected_shape}, got {quantiles.shape}"
         assert torch.isfinite(quantiles).all()
     
-    # def test_action_sampling(self):
-    #     """Test action sampling with distribution update"""
-    #     actions = self.network.act(self.actor_obs)
+    def test_action_sampling(self):
+        """Test action sampling with distribution update"""
+        actions = self.network.act(self.actor_obs)
         
-    #     assert actions.shape == (self.batch_size, self.num_actions)
-    #     assert torch.isfinite(actions).all()
+        assert actions.shape == (self.batch_size, self.num_actions)
+        assert torch.isfinite(actions).all()
         
-    #     # Check that distribution was created
-    #     assert self.network.distribution is not None
-    #     assert self.network.action_mean.shape == (self.batch_size, self.num_actions)
-    #     assert self.network.action_std.shape == (self.batch_size, self.num_actions)
+        # Check that distribution was created
+        assert self.network.distribution is not None
+        assert self.network.action_mean.shape == (self.batch_size, self.num_actions)
+        assert self.network.action_std.shape == (self.batch_size, self.num_actions)
     
-    # def test_action_inference(self):
-    #     """Test deterministic action inference"""
-    #     actions_mean = self.network.act_inference(self.actor_obs)
+    def test_action_inference(self):
+        """Test deterministic action inference"""
+        actions_mean = self.network.act_inference(self.actor_obs)
         
-    #     assert actions_mean.shape == (self.batch_size, self.num_actions)
-    #     assert torch.isfinite(actions_mean).all()
+        assert actions_mean.shape == (self.batch_size, self.num_actions)
+        assert torch.isfinite(actions_mean).all()
     
-    # def test_log_prob_computation(self):
-    #     """Test log probability computation"""
-    #     # First sample actions to create distribution
-    #     actions = self.network.act(self.actor_obs)
+    def test_log_prob_computation(self):
+        """Test log probability computation"""
+        # First sample actions to create distribution
+        actions = self.network.act(self.actor_obs)
         
-    #     # Compute log probabilities
-    #     log_probs = self.network.get_actions_log_prob(actions)
+        # Compute log probabilities
+        log_probs = self.network.get_actions_log_prob(actions)
         
-    #     assert log_probs.shape == (self.batch_size,)
-    #     assert torch.isfinite(log_probs).all()
-    #     assert (log_probs <= 0).all()  # Log probabilities should be negative
+        assert log_probs.shape == (self.batch_size,)
+        assert torch.isfinite(log_probs).all()
+        assert (log_probs <= 0).all()  # Log probabilities should be negative
     
-    # def test_entropy_computation(self):
-    #     """Test entropy computation"""
-    #     # Sample actions to create distribution
-    #     self.network.act(self.actor_obs)
+    def test_entropy_computation(self):
+        """Test entropy computation"""
+        # Sample actions to create distribution
+        self.network.act(self.actor_obs)
         
-    #     entropy = self.network.entropy
+        entropy = self.network.entropy
         
-    #     assert entropy.shape == (self.batch_size,)
-    #     assert torch.isfinite(entropy).all()
-    #     assert (entropy >= 0).all()  # Entropy should be non-negative
+        assert entropy.shape == (self.batch_size,)
+        assert torch.isfinite(entropy).all()
+        assert (entropy >= 0).all()  # Entropy should be non-negative
     
-    # def test_reset_functionality(self):
-    #     """Test reset functionality"""
-    #     # Process some data first
-    #     self.network.act(self.actor_obs)
+    def test_reset_functionality(self):
+        """Test reset functionality"""
+        # Process some data first
+        self.network.act(self.actor_obs)
         
-    #     # Test full reset
-    #     self.network.reset()
+        # Test full reset
+        self.network.reset()
         
-    #     # Test partial reset with done mask
-    #     dones = torch.zeros(self.batch_size, dtype=torch.bool)
-    #     dones[0] = True  # Mark first environment as done
-    #     dones[2] = True  # Mark third environment as done
+        # Test partial reset with done mask
+        dones = torch.zeros(self.batch_size, dtype=torch.bool)
+        dones[0] = True  # Mark first environment as done
+        dones[2] = True  # Mark third environment as done
         
-    #     self.network.reset(dones)
+        self.network.reset(dones)
         
-    #     # No assertion needed, just check it doesn't crash
+        # No assertion needed, just check it doesn't crash
     
     def test_sequential_processing(self):
         """Test processing sequential data"""
@@ -172,43 +173,43 @@ class TestQuantileNN:
         mean_diff = torch.abs(first_actions - last_actions).mean()
         assert mean_diff > 1e-6, "Actions should change over sequence due to RNN"
     
-    # def test_hidden_state_management(self):
-    #     """Test hidden state retrieval"""
-    #     # Process some data
-    #     self.network.act(self.actor_obs)
+    def test_hidden_state_management(self):
+        """Test hidden state retrieval"""
+        # Process some data
+        self.network.act(self.actor_obs)
         
-    #     # Get hidden states
-    #     actor_hidden, critic_hidden = self.network.get_hidden_states()
+        # Get hidden states
+        actor_hidden, critic_hidden = self.network.get_hidden_states()
         
-    #     assert actor_hidden is not None
-    #     # Critic hidden should be None as returned by get_hidden_states
-    #     assert critic_hidden is None
+        assert actor_hidden is not None
+        # Critic hidden should be None as returned by get_hidden_states
+        assert critic_hidden is None
     
-    # def test_different_noise_types(self):
-    #     """Test different noise standard deviation types"""
-    #     # Test scalar noise type
-    #     network_scalar = Quantile_NN(
-    #         num_actor_obs=self.num_actor_obs,
-    #         num_critic_obs=self.num_critic_obs,
-    #         num_actions=self.num_actions,
-    #         noise_std_type="scalar"
-    #     )
+    def test_different_noise_types(self):
+        """Test different noise standard deviation types"""
+        # Test scalar noise type
+        network_scalar = Quantile_NN(
+            num_actor_obs=self.num_actor_obs,
+            num_critic_obs=self.num_critic_obs,
+            num_actions=self.num_actions,
+            noise_std_type="scalar"
+        )
         
-    #     network_scalar.reset()
-    #     actions_scalar = network_scalar.act(self.actor_obs)
-    #     assert actions_scalar.shape == (self.batch_size, self.num_actions)
+        network_scalar.reset()
+        actions_scalar = network_scalar.act(self.actor_obs)
+        assert actions_scalar.shape == (self.batch_size, self.num_actions)
         
-    #     # Test log noise type
-    #     network_log = Quantile_NN(
-    #         num_actor_obs=self.num_actor_obs,
-    #         num_critic_obs=self.num_critic_obs,
-    #         num_actions=self.num_actions,
-    #         noise_std_type="log"
-    #     )
+        # Test log noise type
+        network_log = Quantile_NN(
+            num_actor_obs=self.num_actor_obs,
+            num_critic_obs=self.num_critic_obs,
+            num_actions=self.num_actions,
+            noise_std_type="log"
+        )
         
-    #     network_log.reset()
-    #     actions_log = network_log.act(self.actor_obs)
-    #     assert actions_log.shape == (self.batch_size, self.num_actions)
+        network_log.reset()
+        actions_log = network_log.act(self.actor_obs)
+        assert actions_log.shape == (self.batch_size, self.num_actions)
     
     def test_state_dict_operations(self):
         """Test state dictionary save/load"""
