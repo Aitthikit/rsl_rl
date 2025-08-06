@@ -56,6 +56,9 @@ class TestQuantileNN:
     
     def test_actor_forward(self):
         """Test actor forward pass"""
+        # Reset network state first
+        self.network.reset()
+        
         # Prepare input through memory
         rnn_output = self.network.memory_a(self.actor_obs)
         actor_output = self.network.actor(rnn_output.squeeze(0))
@@ -65,6 +68,8 @@ class TestQuantileNN:
     
     def test_critic_forward_values(self):
         """Test critic forward pass returning values"""
+        # Reset both network and critic hidden states
+        self.network.reset()
         self.network.critic.reset_full_hidden_state(self.batch_size)
         
         values = self.network.evaluate(self.critic_obs)
@@ -75,6 +80,7 @@ class TestQuantileNN:
     
     def test_critic_forward_quantiles(self):
         """Test critic forward pass returning quantile distributions"""
+        # Reset both network and critic hidden states
         self.network.reset()
         self.network.critic.reset_full_hidden_state(self.batch_size)
         
@@ -87,6 +93,9 @@ class TestQuantileNN:
     
     def test_action_sampling(self):
         """Test action sampling with distribution update"""
+        # Reset network state first
+        self.network.reset()
+        
         actions = self.network.act(self.actor_obs)
         
         assert actions.shape == (self.batch_size, self.num_actions)
@@ -99,6 +108,9 @@ class TestQuantileNN:
     
     def test_action_inference(self):
         """Test deterministic action inference"""
+        # Reset network state first
+        self.network.reset()
+        
         actions_mean = self.network.act_inference(self.actor_obs)
         
         assert actions_mean.shape == (self.batch_size, self.num_actions)
@@ -106,6 +118,9 @@ class TestQuantileNN:
     
     def test_log_prob_computation(self):
         """Test log probability computation"""
+        # Reset network state first
+        self.network.reset()
+        
         # First sample actions to create distribution
         actions = self.network.act(self.actor_obs)
         
@@ -118,6 +133,9 @@ class TestQuantileNN:
     
     def test_entropy_computation(self):
         """Test entropy computation"""
+        # Reset network state first
+        self.network.reset()
+        
         # Sample actions to create distribution
         self.network.act(self.actor_obs)
         
@@ -146,6 +164,9 @@ class TestQuantileNN:
     
     def test_sequential_processing(self):
         """Test processing sequential data"""
+        # Reset network state at the beginning
+        self.network.reset()
+        
         actions_list = []
         values_list = []
         
@@ -153,6 +174,9 @@ class TestQuantileNN:
         for t in range(self.seq_len):
             obs_t = self.seq_actor_obs[t]
             critic_obs_t = torch.randn(self.batch_size, self.num_critic_obs)
+            
+            # Reset critic hidden state for each step (since it's independent)
+            self.network.critic.reset_full_hidden_state(self.batch_size)
             
             actions = self.network.act(obs_t)
             values = self.network.evaluate(critic_obs_t)
@@ -175,7 +199,8 @@ class TestQuantileNN:
     
     def test_hidden_state_management(self):
         """Test hidden state retrieval"""
-        # Process some data
+        # Reset and process some data
+        self.network.reset()
         self.network.act(self.actor_obs)
         
         # Get hidden states
@@ -233,6 +258,10 @@ class TestQuantileNN:
     
     def test_gradient_flow(self):
         """Test gradient flow through the entire network"""
+        # Reset network state
+        self.network.reset()
+        self.network.critic.reset_full_hidden_state(self.batch_size)
+        
         # Forward pass
         actions = self.network.act(self.actor_obs)
         values = self.network.evaluate(self.critic_obs)
@@ -258,6 +287,10 @@ class TestQuantileNN:
         # Move network to device
         self.network = self.network.to(device)
         
+        # Reset network state
+        self.network.reset()
+        self.network.critic.reset_full_hidden_state(self.batch_size)
+        
         # Move data to device
         actor_obs_device = self.actor_obs.to(device)
         critic_obs_device = self.critic_obs.to(device)
@@ -275,6 +308,7 @@ class TestQuantileNN:
         
         for bs in batch_sizes:
             self.network.reset()
+            self.network.critic.reset_full_hidden_state(bs)
             
             obs = torch.randn(bs, self.num_actor_obs)
             critic_obs = torch.randn(bs, self.num_critic_obs)
@@ -302,6 +336,7 @@ class TestIntegration:
         
         batch_size = 8
         network.reset()
+        network.critic.reset_full_hidden_state(batch_size)
         
         # Generate sample data
         obs = torch.randn(batch_size, 10)
@@ -357,6 +392,9 @@ class TestIntegration:
         for step in range(seq_length):
             obs = torch.randn(num_envs, 15)
             
+            # Reset critic hidden state for each step
+            network.critic.reset_full_hidden_state(num_envs)
+            
             # Some environments might be done
             dones = torch.zeros(num_envs, dtype=torch.bool)
             if step > 0 and step % 7 == 0:  # Reset some envs periodically
@@ -398,11 +436,11 @@ def run_all_tests():
                 test_method = getattr(test_instance, test_method_name)
                 test_method()
                 
-                print(f"✅ {test_method_name}")
+                print(f"PASS {test_method_name}")
                 passed_tests += 1
                 
             except Exception as e:
-                print(f"❌ {test_method_name}: {str(e)}")
+                print(f"FAIL {test_method_name}: {str(e)}")
                 # Uncomment the next line for detailed error info during debugging
                 # import traceback; traceback.print_exc()
     
