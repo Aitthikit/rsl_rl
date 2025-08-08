@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pytest
-from quantile_nn import QuantileCritic, energy_loss, risk_measure_wang
+from rsl_rl.modules.quantile_nn_temp import QuantileCritic, energy_loss, risk_measure_wang
 
 
 class TestQuantileCritic:

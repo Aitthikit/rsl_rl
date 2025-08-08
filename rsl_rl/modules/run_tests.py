@@ -54,7 +54,7 @@ def run_performance_test():
     print("=== Performance Test ===")
     
     # Import here to avoid circular imports
-    from quantile_nn import Quantile_NN
+    from rsl_rl.modules.quantile_nn_temp import Quantile_NN
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -117,7 +117,7 @@ def run_memory_test():
         print("CUDA not available, skipping GPU memory test")
         return
     
-    from quantile_nn import Quantile_NN
+    from rsl_rl.modules.quantile_nn_temp import Quantile_NN
     
     device = torch.device('cuda')
     
@@ -161,7 +161,7 @@ def run_comprehensive_test():
     print("=== Comprehensive Integration Test ===")
     
     try:
-        from quantile_nn import Quantile_NN, energy_loss
+        from rsl_rl.modules.quantile_nn_temp import Quantile_NN, energy_loss
         
         # Create network
         network = Quantile_NN(

@@ -1,25 +1,36 @@
-# Copyright (c) 2021-2025, ETH Zurich and NVIDIA CORPORATION
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 from __future__ import annotations
-
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from itertools import chain
+from torch import nn
+from typing import Dict, List, Tuple, Type, Union
 
-from rsl_rl.modules import ActorCritic
+from rsl_rl.algorithms.ppo import PPO
+from rsl_rl.modules.quantile_nn_temp import Quantile_NN
+# from rsl_rl.distributions import QuantileDistribution
+from rsl_rl.env import VecEnv
+# from rsl_rl.utils.benchmarkable import Benchmarkable
+from rsl_rl.utils.recurrency import trajectories_to_transitions, transitions_to_trajectories
+# from rsl_rl.modules import ImplicitQuantileNetwork, QuantileNetwork
+# from rsl_rl.storage.storage import Dataset
+
+
+import torch.optim as optim
+# from itertools import chain
+
+# from rsl_rl.modules import ActorCritic
 from rsl_rl.modules.rnd import RandomNetworkDistillation
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import string_to_callable
 
 
-class PPO:
+from rsl_rl.modules.rnd import RandomNetworkDistillation
+from rsl_rl.storage import RolloutStorage
+from rsl_rl.utils import string_to_callable
+
+
+class DPPO:
     """Proximal Policy Optimization algorithm (https://arxiv.org/abs/1707.06347)."""
 
-    policy: ActorCritic
+    policy: Quantile_NN
     """The actor critic module."""
 
     def __init__(
@@ -97,8 +108,10 @@ class PPO:
         # Create optimizer
         self.optimizer = optim.Adam(self.policy.parameters(), lr=learning_rate)
         # Create rollout storage
+        #####################################################
         self.storage: RolloutStorage = None  # type: ignore
         self.transition = RolloutStorage.Transition()
+        #####################################################
 
         # PPO parameters
         self.clip_param = clip_param
@@ -147,9 +160,6 @@ class PPO:
         # need to record obs and critic_obs before env.step()
         self.transition.observations = obs
         self.transition.privileged_observations = critic_obs
-        print(self.transition.values.shape)
-        # print(obs.shape)
-        # print(critic_obs.shape)
         return self.transition.actions
 
     def process_env_step(self, rewards, dones, infos):
@@ -157,8 +167,6 @@ class PPO:
         # Note: we clone here because later on we bootstrap the rewards based on timeouts
         self.transition.rewards = rewards.clone()
         self.transition.dones = dones
-        # print(rewards.unsqueeze(0))
-        # print(dones)
 
         # Compute the intrinsic rewards and add to extrinsic rewards
         if self.rnd:
@@ -265,9 +273,7 @@ class PPO:
             self.policy.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             # -- critic
-            print(critic_obs_batch.shape)
             value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
-            print(value_batch.shape)
             # print(f"Critic MLP output: {critic_obs_batch.shape}")
             # value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch)
             # print(f"Critic MLP output: {value_batch.shape}")
@@ -324,7 +330,7 @@ class PPO:
 
             # Value function loss
             if self.use_clipped_value_loss:
-                print(target_values_batch.shape, value_batch.shape)
+                # print(target_values_batch.shape, value_batch.shape)
                 value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
                     -self.clip_param, self.clip_param
                 )

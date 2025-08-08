@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pytest
-from quantile_nn import Quantile_NN
+from rsl_rl.modules.quantile_nn_temp import Quantile_NN
 
 
 class TestQuantileNN:
@@ -440,7 +440,7 @@ def run_all_tests():
                 passed_tests += 1
                 
             except Exception as e:
-                print(f"FAIL {test_method_name}: {str(e)}")
+                print(f"❌ {test_method_name}: {str(e)}")
                 # Uncomment the next line for detailed error info during debugging
                 # import traceback; traceback.print_exc()
     
