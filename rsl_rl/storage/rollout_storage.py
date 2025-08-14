@@ -287,7 +287,7 @@ class RolloutStorage:
             for i in range(num_mini_batches):
                 start = i * mini_batch_size
                 stop = (i + 1) * mini_batch_size
-
+                
                 dones = self.dones.squeeze(-1)
                 last_was_done = torch.zeros_like(dones, dtype=torch.bool)
                 last_was_done[1:] = dones[:-1]

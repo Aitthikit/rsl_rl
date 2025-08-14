@@ -194,29 +194,56 @@ def test_dppo_storage():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Environment parameters
-    num_envs = 4
-    num_steps = 24
-    num_actor_obs = 36
-    num_critic_obs = 36
+    num_envs = 128
+    num_steps = 64
+    num_actor_obs = 32
+    num_critic_obs = 48
     num_actions = 8
+    quantile_count = 200
     
-    # Create policy and DPPO
+    # Create policy
     policy = Quantile_NN(
         num_actor_obs=num_actor_obs,
         num_critic_obs=num_critic_obs,
         num_actions=num_actions,
-        quantile_count=32,
-        rnn_hidden_dim=16
+        quantile_count=quantile_count,
+        actor_hidden_dims=[256, 256],
+        critic_hidden_dims=[512, 512],
+        rnn_hidden_dim=128
     )
     
     dppo = DPPO(
         policy=policy,
-        num_learning_epochs=2,
-        num_mini_batches=4,
+        num_learning_epochs=4,
+        num_mini_batches=8,
         device=device,
         distributional_loss_type="mse",
-        quantile_loss_coef=0.5
+        quantile_loss_coef=0.5,
     )
+
+    # num_envs = 4
+    # num_steps = 24
+    # num_actor_obs = 36
+    # num_critic_obs = 36
+    # num_actions = 8
+    
+    # # Create policy and DPPO
+    # policy = Quantile_NN(
+    #     num_actor_obs=num_actor_obs,
+    #     num_critic_obs=num_critic_obs,
+    #     num_actions=num_actions,
+    #     quantile_count=32,
+    #     rnn_hidden_dim=16
+    # )
+    
+    # dppo = DPPO(
+    #     policy=policy,
+    #     num_learning_epochs=2,
+    #     num_mini_batches=4,
+    #     device=device,
+    #     distributional_loss_type="mse",
+    #     quantile_loss_coef=0.5
+    # )
     
     # Initialize storage
     dppo.init_storage(
@@ -287,7 +314,7 @@ def test_distributional_losses():
     )
     
     # Test different loss types
-    loss_types = ["mse", "huber", "energy"]
+    loss_types = ["mse", "huber"]
     
     for loss_type in loss_types:
         print(f"  Testing {loss_type} loss...")
@@ -327,6 +354,7 @@ def test_quantile_visualization():
         input_dim=4,
         output_dim=1,
         hidden_dims=[32, 32],
+        activations=[nn.ReLU(), nn.ReLU()],
         quantile_count=51,  # Odd number for cleaner median
         measure_kwargs={"beta": 0.0}  # Neutral risk
     )
@@ -371,7 +399,7 @@ def run_performance_test():
     print(f"Using device: {device}")
     
     # Performance test parameters
-    num_envs = 128
+    num_envs = 64
     num_steps = 64
     num_actor_obs = 32
     num_critic_obs = 48
@@ -398,7 +426,7 @@ def run_performance_test():
     
     # Initialize storage
     dppo.init_storage(
-        training_type="on_policy",
+        training_type="dppo",
         num_envs=num_envs,
         num_transitions_per_env=num_steps,
         actor_obs_shape=[num_actor_obs],
@@ -424,9 +452,15 @@ def run_performance_test():
         
         # Simulate environment step
         rewards = torch.randn(num_envs, 1, device=device)
-        dones = torch.zeros(num_envs, 1, dtype=torch.bool, device=device)
-        infos = {"time_outs": torch.zeros_like(dones, dtype=torch.float)}
+        rewards = rewards.squeeze(1)
         
+        # dones = torch.zeros(num_envs, 1, dtype=torch.bool, device=device)
+        # infos = {"time_outs": torch.zeros_like(dones, dtype=torch.float)}
+        dones = torch.zeros(num_envs, 1, dtype=torch.float, device=device)
+        infos = {"time_outs": torch.zeros_like(dones, dtype=torch.float).squeeze(1)}
+        dones = dones.squeeze(1)
+
+
         dppo.process_env_step(rewards, dones, infos)
         obs = torch.randn(num_envs, num_actor_obs, device=device)
     
@@ -466,7 +500,7 @@ def main():
         test_dppo_initialization()
         test_dppo_storage()
         test_distributional_losses()
-        test_quantile_visualization()
+        # test_quantile_visualization()
         
         # Performance test
         run_performance_test()

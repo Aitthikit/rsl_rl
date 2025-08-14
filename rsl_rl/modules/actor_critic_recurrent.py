@@ -74,6 +74,7 @@ class ActorCriticRecurrent(ActorCritic):
 
     def evaluate(self, critic_observations, masks=None, hidden_states=None):
         input_c = self.memory_c(critic_observations, masks, hidden_states)
+        # print(f"Input C: {input_c.shape}")
         return super().evaluate(input_c.squeeze(0))
 
     def get_hidden_states(self):

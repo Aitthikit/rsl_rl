@@ -147,7 +147,7 @@ class PPO:
         # need to record obs and critic_obs before env.step()
         self.transition.observations = obs
         self.transition.privileged_observations = critic_obs
-        print(self.transition.values.shape)
+        # print(self.transition.values.shape)
         # print(obs.shape)
         # print(critic_obs.shape)
         return self.transition.actions
@@ -174,6 +174,11 @@ class PPO:
 
         # Bootstrapping on time outs
         if "time_outs" in infos:
+            print(torch.squeeze(
+                self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
+            ).shape)
+            print(self.transition.rewards.shape)
+            print(self.transition.values.shape, infos["time_outs"].unsqueeze(1).to(self.device).shape)
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
             )
@@ -265,9 +270,9 @@ class PPO:
             self.policy.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             # -- critic
-            print(critic_obs_batch.shape)
+            # print(critic_obs_batch.shape)
             value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
-            print(value_batch.shape)
+            # print(value_batch.shape)
             # print(f"Critic MLP output: {critic_obs_batch.shape}")
             # value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch)
             # print(f"Critic MLP output: {value_batch.shape}")

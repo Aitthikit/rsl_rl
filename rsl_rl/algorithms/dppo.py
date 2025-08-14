@@ -144,7 +144,6 @@ class DPPO:
         self.transition.actions_log_prob = self.policy.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.policy.action_mean.detach()
         self.transition.action_sigma = self.policy.action_std.detach()
-        # print(self.transition.values.shape)
         # Record observations
         self.transition.observations = obs
         self.transition.privileged_observations = critic_obs
@@ -156,7 +155,6 @@ class DPPO:
 
         # Compute intrinsic rewards if RND is used
         if self.rnd:
-            print("rnd run")
             rnd_state = infos["observations"]["rnd_state"]
             self.intrinsic_rewards, rnd_state = self.rnd.get_intrinsic_reward(rnd_state)
             self.transition.rewards += self.intrinsic_rewards
@@ -166,8 +164,8 @@ class DPPO:
         if "time_outs" in infos:
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
-                # self.transition.values * infos["time_outs"].to(self.device), 1
             )
+
         # Record transition
         self.storage.add_transitions(self.transition)
         self.transition.clear()
@@ -185,7 +183,7 @@ class DPPO:
         quantile_count = predicted_quantiles.shape[-1]
         
         # Expand target values to match quantile dimensions
-        target_expanded = target_values.unsqueeze(-1).expand(-1, -1, -1, quantile_count)
+        target_expanded = target_values
         
         if self.distributional_loss_type == "mse":
             # Simple MSE loss between quantiles and targets
@@ -204,6 +202,7 @@ class DPPO:
             raise ValueError(f"Unknown distributional loss type: {self.distributional_loss_type}")
         
         return loss
+
 
     def update(self):
         mean_value_loss = 0
@@ -236,6 +235,23 @@ class DPPO:
             masks_batch,
             rnd_state_batch,
         ) in generator:
+            old_actions_log_prob_batch = old_actions_log_prob_batch.detach()
+            target_values_batch        = target_values_batch.detach()
+            advantages_batch           = advantages_batch.detach()
+            returns_batch              = returns_batch.detach()
+            old_mu_batch               = old_mu_batch.detach()
+            old_sigma_batch            = old_sigma_batch.detach()
+
+            # Make sure hidden states are detached from previous graphs
+            if hid_states_batch is not None:
+                if isinstance(hid_states_batch, (list, tuple)):
+                    hid_states_batch = [
+                        tuple(x.detach() if x is not None else None for x in h) if isinstance(h, (list, tuple))
+                        else (h.detach() if h is not None else None)
+                        for h in hid_states_batch
+                    ]
+                else:
+                    hid_states_batch = hid_states_batch.detach()
 
             num_aug = 1
             original_batch_size = obs_batch.shape[0]
@@ -266,15 +282,13 @@ class DPPO:
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             
             # Get both scalar values and quantile distributions
-            # print(critic_obs_batch.shape)
             value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
-            # print(value_batch.shape)
             quantiles_batch = self.policy.evaluate_quantiles(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
             
             # Entropy (only for original samples)
-            mu_batch = self.policy.action_mean[:original_batch_size]
-            sigma_batch = self.policy.action_std[:original_batch_size]
-            entropy_batch = self.policy.entropy[:original_batch_size]
+            mu_batch = self.policy.action_mean[:original_batch_size].clone()
+            sigma_batch = self.policy.action_std[:original_batch_size].clone()
+            entropy_batch = self.policy.entropy[:original_batch_size].clone()
 
             # Adaptive KL scheduling
             if self.desired_kl is not None and self.schedule == "adaptive":
@@ -317,7 +331,6 @@ class DPPO:
             # Value function loss (using scalar values)
             # TODO: Split function from forward to compute loss 
             if self.use_clipped_value_loss:
-                print(target_values_batch.shape,value_batch.shape)
                 value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
                     -self.clip_param, self.clip_param
                 )
@@ -337,48 +350,52 @@ class DPPO:
                    self.entropy_coef * entropy_batch.mean())
 
             # Symmetry loss
-            if self.symmetry:
-                if not self.symmetry["use_data_augmentation"]:
-                    data_augmentation_func = self.symmetry["data_augmentation_func"]
-                    obs_batch, _ = data_augmentation_func(
-                        obs=obs_batch, actions=None, env=self.symmetry["_env"], obs_type="policy"
-                    )
-                    num_aug = int(obs_batch.shape[0] / original_batch_size)
+            # if self.symmetry:
+            #     if not self.symmetry["use_data_augmentation"]:
+            #         data_augmentation_func = self.symmetry["data_augmentation_func"]
+            #         obs_batch, _ = data_augmentation_func(
+            #             obs=obs_batch, actions=None, env=self.symmetry["_env"], obs_type="policy"
+            #         )
+            #         num_aug = int(obs_batch.shape[0] / original_batch_size)
 
-                mean_actions_batch = self.policy.act_inference(obs_batch.detach().clone())
-                action_mean_orig = mean_actions_batch[:original_batch_size]
-                _, actions_mean_symm_batch = data_augmentation_func(
-                    obs=None, actions=action_mean_orig, env=self.symmetry["_env"], obs_type="policy"
-                )
+            #     mean_actions_batch = self.policy.act_inference(obs_batch.detach().clone())
+            #     action_mean_orig = mean_actions_batch[:original_batch_size]
+            #     _, actions_mean_symm_batch = data_augmentation_func(
+            #         obs=None, actions=action_mean_orig, env=self.symmetry["_env"], obs_type="policy"
+            #     )
 
-                mse_loss = torch.nn.MSELoss()
-                symmetry_loss = mse_loss(
-                    mean_actions_batch[original_batch_size:], actions_mean_symm_batch.detach()[original_batch_size:]
-                )
+            #     mse_loss = torch.nn.MSELoss()
+            #     symmetry_loss = mse_loss(
+            #         mean_actions_batch[original_batch_size:], actions_mean_symm_batch.detach()[original_batch_size:]
+            #     )
                 
-                if self.symmetry["use_mirror_loss"]:
-                    loss += self.symmetry["mirror_loss_coeff"] * symmetry_loss
-                else:
-                    symmetry_loss = symmetry_loss.detach()
+            #     if self.symmetry["use_mirror_loss"]:
+            #         loss += self.symmetry["mirror_loss_coeff"] * symmetry_loss
+            #     else:
+            #         symmetry_loss = symmetry_loss.detach()
 
             # Random Network Distillation loss
-            if self.rnd:
-                predicted_embedding = self.rnd.predictor(rnd_state_batch)
-                target_embedding = self.rnd.target(rnd_state_batch).detach()
-                mseloss = torch.nn.MSELoss()
-                rnd_loss = mseloss(predicted_embedding, target_embedding)
+            # if self.rnd:
+            #     predicted_embedding = self.rnd.predictor(rnd_state_batch)
+            #     target_embedding = self.rnd.target(rnd_state_batch).detach()
+            #     mseloss = torch.nn.MSELoss()
+            #     rnd_loss = mseloss(predicted_embedding, target_embedding)
 
             # Compute gradients
             self.optimizer.zero_grad()
-            loss.backward()
             
-            if self.rnd:
-                self.rnd_optimizer.zero_grad()
-                rnd_loss.backward()
+            # if self.rnd:
+            #     loss.backward(retain_graph=True)
+            #     self.rnd_optimizer.zero_grad()
+            #     rnd_loss.backward()
+            
+            # else:
+            # torch.autograd.set_detect_anomaly(True)
+            loss.backward()
 
             # Collect gradients from all GPUs
-            if self.is_multi_gpu:
-                self.reduce_parameters()
+            # if self.is_multi_gpu:
+            #     self.reduce_parameters()
 
             # Apply gradients
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)

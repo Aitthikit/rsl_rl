@@ -28,6 +28,7 @@ def reshape_measure_parameters(
     qn, *params: Union[torch.Tensor, float]
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
     """Reshapes the parameters of a measure function to match the shape of the quantile network."""
+    # print(qn)
     if not params:
         return qn._tau.to(qn.device), *params
 
@@ -52,10 +53,10 @@ def make_distorted_measure(distorted_tau: torch.Tensor) -> Callable:
 
     def distorted_measure(quantiles):
         sorted_quantiles, _ = quantiles.sort(-1)
-        sorted_quantiles = sorted_quantiles.reshape(-1, sorted_quantiles.shape[-1])
+        # print(f"Sorted quantiles: {sorted_quantiles.shape}")
+        # sorted_quantiles = sorted_quantiles.reshape(-1, sorted_quantiles.shape[-1])
+        # print(f"Sort_quantile: {sorted_quantiles.shape}, {distortion.shape}")
         values = squeeze_preserve_batch((distortion.to(sorted_quantiles.device) * sorted_quantiles).sum(-1))
-        # print(values.shape)
-        # print(values.unsqueeze(-1).shape)
         return values.unsqueeze(-1)
 
     return distorted_measure
@@ -96,6 +97,7 @@ class QuantileCritic(nn.Module):
         
         self._normalization = nn.Identity()
         self._recurrent = recurrent_layers > 0
+        self.hidden_state = None
         
         if self._recurrent:
             # Use Memory class for RNN handling
@@ -107,7 +109,10 @@ class QuantileCritic(nn.Module):
         
         # Build MLP layers after RNN
         layers = []
+        # print(mlp_input_dim)
+        # print(range(len(activations)))
         dims = [mlp_input_dim] + hidden_dims
+        # print(dims)
         # for i in range(len(dims) - 1):
         #     layers.append(nn.Linear(dims[i], dims[i + 1]))
         #     if i < len(activations):
@@ -117,7 +122,7 @@ class QuantileCritic(nn.Module):
             activation = activations[i]
             layers.append(layer)
             layers.append(activation)
-        print(f"QuantileCritic MLP: {layers}")
+        # print(f"QuantileCritic MLP: {layers}")
         
         self._layers = nn.Sequential(*layers)
         
@@ -138,7 +143,7 @@ class QuantileCritic(nn.Module):
         # Risk measure
         measure_func = risk_measure_wang 
         self._measure_func = measure_func
-        self._measure = measure_func(self, **measure_kwargs)
+        self._measure = measure_func(self, **measure_kwargs) #use function in make_distortes_measure
         
         self._last_quantiles = None
 
@@ -164,22 +169,38 @@ class QuantileCritic(nn.Module):
                 features = features.squeeze(0)
         else:
             features = input
+
+        # if self._recurrent and self.memory is not None:
+        #     # current_hidden_state = self.hidden_state if hidden_states is None else hidden_states
+        #     # current_hidden_state = (current_hidden_state[0].to(self.device), current_hidden_state[1].to(self.device))
+        #     print("memory run",self.memory)
+        #     input = input.unsqueeze(0) if len(input.shape) == 2 else input
+        #     input, next_hidden_state = self.memory[0](input,masks,hidden_states)
+        #     input = self.memory[1](input).squeeze(0)
             
-        features = self._layers(features)
+
+        #     if hidden_states is None:
+        #         self.hidden_state = next_hidden_state
+        #     self._last_hidden_state = next_hidden_state
+        features = squeeze_preserve_batch(self._layers(features))
+        # features = squeeze_preserve_batch(self._layers(input))
+        
+        # print(f"Features shape: {features.shape}")
+            
+        # features = self._layers(features)
         
         # Generate quantiles for each output dimension
         quantiles = torch.stack([layer(features) for layer in self._quantile_layers], dim=1)
-        print(f"Quantile Before: {quantiles.shape}")
         quantiles = squeeze_preserve_batch(quantiles)
-        print(f"Quantile After: {quantiles.shape}")
+        # print(f"Quantile After: {quantiles.shape}")
         self._last_quantiles = quantiles
         
         if distribution:
             return quantiles
-        
-        # 
+
         # Convert quantiles to values using risk measure
         values = self.quantiles_to_values(quantiles, *measure_args)
+        # print("values",values.shape)
         return values
     
     def quantiles_to_values(self, quantiles: torch.Tensor, *measure_args) -> torch.Tensor:
@@ -269,10 +290,10 @@ class Quantile_NN(nn.Module):
                 actor_layers.append(nn.Linear(actor_hidden_dims[i], actor_hidden_dims[i + 1]))
                 actor_layers.append(activation)
         self.actor = nn.Sequential(*actor_layers)
-        print(f"Actor MLP: {actor_layers}")
+        # print(f"Actor MLP: {actor_layers}")
 
         # Critic network - QuantileCritic
-        print([activation] * len(critic_hidden_dims))
+        # print([activation] * len(critic_hidden_dims))
         self.critic = QuantileCritic(
             input_dim=mlp_input_dim_c,
             output_dim=1,  # Value function outputs single value
