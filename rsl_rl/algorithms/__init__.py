@@ -7,5 +7,5 @@
 
 from .distillation import Distillation
 from .ppo import PPO
-from .dppo_temp import DPPO
+from .dppo import DPPO
 __all__ = ["PPO", "Distillation", "DPPO"]

@@ -36,6 +36,7 @@ class ActorCritic(nn.Module):
         activation = resolve_nn_activation(activation)
 
         mlp_input_dim_a = num_actor_obs
+        print(f"MLP input dimension for actor: {mlp_input_dim_a}")
         mlp_input_dim_c = num_critic_obs
         # Policy
         actor_layers = []

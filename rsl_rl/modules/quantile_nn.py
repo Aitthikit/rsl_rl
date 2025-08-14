@@ -160,7 +160,11 @@ class QuantileCritic(nn.Module):
         return self._quantile_count
 
     def forward(self, x: torch.Tensor, masks=None, hidden_states=None, distribution: bool = False, measure_args: list = [], **kwargs) -> torch.Tensor:
-        input = self._normalization(x.to(self.device))
+        input = self._normalization(x.to(self.device)) # TODO: IS this need?
+        print(f"Critic_obs: {input.shape}")
+        print(f"Masks: {masks.shape if masks is not None else 'None'}")
+        print(f"Hidden_states: {len(hidden_states) if hidden_states is not None else 'None'}")
+
         
         if self._recurrent and self.memory is not None:
             # Use Memory class for RNN processing
@@ -185,7 +189,7 @@ class QuantileCritic(nn.Module):
         features = squeeze_preserve_batch(self._layers(features))
         # features = squeeze_preserve_batch(self._layers(input))
         
-        # print(f"Features shape: {features.shape}")
+        print(f"Features shape: {features.shape}")
             
         # features = self._layers(features)
         
@@ -218,6 +222,7 @@ class QuantileCritic(nn.Module):
     
     def get_hidden_states(self):
         """Get current hidden states."""
+        print("have memory",self.memory)
         if self.memory is not None:
             return self.memory.hidden_states
         return None
@@ -277,6 +282,7 @@ class Quantile_NN(nn.Module):
         
         activation = resolve_nn_activation(activation)
         mlp_input_dim_a = rnn_hidden_dim
+        # print(f"MLP input dimension for actor: {mlp_input_dim_a}")
         mlp_input_dim_c = num_critic_obs
 
         # Actor network
@@ -290,6 +296,7 @@ class Quantile_NN(nn.Module):
                 actor_layers.append(nn.Linear(actor_hidden_dims[i], actor_hidden_dims[i + 1]))
                 actor_layers.append(activation)
         self.actor = nn.Sequential(*actor_layers)
+
         # print(f"Actor MLP: {actor_layers}")
 
         # Critic network - QuantileCritic

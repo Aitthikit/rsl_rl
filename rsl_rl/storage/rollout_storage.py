@@ -269,8 +269,9 @@ class RolloutStorage:
     def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
         if self.training_type != "rl" and self.training_type != "dppo":
             raise ValueError("This function is only available for reinforcement learning training.")
+        print(self.observations.shape, self.dones.shape)
         padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
-        print(padded_obs_trajectories.shape,trajectory_masks.shape)
+        print("padded",padded_obs_trajectories.shape,trajectory_masks.shape)
         if self.privileged_observations is not None:
             padded_privileged_obs_trajectories, _ = split_and_pad_trajectories(self.privileged_observations, self.dones)
         else:

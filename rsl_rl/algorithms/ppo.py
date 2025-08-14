@@ -138,6 +138,7 @@ class PPO:
     def act(self, obs, critic_obs):
         if self.policy.is_recurrent:
             self.transition.hidden_states = self.policy.get_hidden_states()
+            print(f"Hidden states: {self.transition.hidden_states.shape}")
         # compute the actions and values
         self.transition.actions = self.policy.act(obs).detach()
         self.transition.values = self.policy.evaluate(critic_obs).detach()
@@ -174,11 +175,11 @@ class PPO:
 
         # Bootstrapping on time outs
         if "time_outs" in infos:
-            print(torch.squeeze(
-                self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
-            ).shape)
-            print(self.transition.rewards.shape)
-            print(self.transition.values.shape, infos["time_outs"].unsqueeze(1).to(self.device).shape)
+            # print(torch.squeeze(
+            #     self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
+            # ).shape)
+            # print(self.transition.rewards.shape)
+            # print(self.transition.values.shape, infos["time_outs"].unsqueeze(1).to(self.device).shape)
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
             )
@@ -271,6 +272,7 @@ class PPO:
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             # -- critic
             # print(critic_obs_batch.shape)
+            print("critic_obs_batch shape:", critic_obs_batch.shape)
             value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
             # print(value_batch.shape)
             # print(f"Critic MLP output: {critic_obs_batch.shape}")
@@ -329,7 +331,7 @@ class PPO:
 
             # Value function loss
             if self.use_clipped_value_loss:
-                print(target_values_batch.shape, value_batch.shape)
+                print("Clippp",target_values_batch.shape, value_batch.shape)
                 value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
                     -self.clip_param, self.clip_param
                 )

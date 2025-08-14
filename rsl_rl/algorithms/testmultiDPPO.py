@@ -8,9 +8,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 import sys
 import os
+import time
 
 # Add the parent directory to path to import the modules
 # Adjust this path based on your project structure
@@ -34,6 +35,7 @@ class MockEnv:
     
     def step(self, actions):
         obs = torch.randn(self.num_envs, self.obs_dim, device=self.device)
+        print(f"  Mock step with actions: {actions.shape} -> {obs.shape}")
         rewards = torch.randn(self.num_envs, 1, device=self.device)
         rewards = rewards.squeeze(1)
         dones = torch.zeros(self.num_envs, 1, dtype=torch.float, device=self.device)
@@ -73,19 +75,19 @@ def test_quantile_critic():
     
     # Test scalar output
     values = critic(x, distribution=False)
-    print(f"✓ Scalar values shape: {values.shape} (expected: [{batch_size}, 1])")
+    print(f" Scalar values shape: {values.shape} (expected: [{batch_size}, 1])")
     # assert values.shape == (batch_size, 1), f"Expected shape [{batch_size}, 1], got {values.shape}"
     
     # Test quantile distribution output
     quantiles = critic(x, distribution=True)
-    print(f"✓ Quantiles shape: {quantiles.shape} (expected: [{batch_size}, 1, {quantile_count}])")
+    print(f" Quantiles shape: {quantiles.shape} (expected: [{batch_size}, 1, {quantile_count}])")
     # assert quantiles.shape == (batch_size, 1, quantile_count), f"Expected shape [{batch_size}, 1, {quantile_count}], got {quantiles.shape}"
     
     # Test measure conversion
     manual_values = critic.quantiles_to_values(quantiles)
-    print(f"✓ Manual measure conversion shape: {manual_values.shape}")
+    print(f" Manual measure conversion shape: {manual_values.shape}")
     
-    print("QuantileCritic tests passed! ✓")
+    print("QuantileCritic tests passed! ")
 
 
 def test_quantile_nn():
@@ -120,35 +122,35 @@ def test_quantile_nn():
     
     # Test actor
     actions = policy.act(actor_obs)
-    print(f"✓ Actions shape: {actions.shape} (expected: [{num_envs}, {num_actions}])")
+    print(f" Actions shape: {actions.shape} (expected: [{num_envs}, {num_actions}])")
     assert actions.shape == (num_envs, num_actions)
     
     # Test action log probabilities
     log_probs = policy.get_actions_log_prob(actions)
-    print(f"✓ Log probs shape: {log_probs.shape} (expected: [{num_envs}])")
+    print(f" Log probs shape: {log_probs.shape} (expected: [{num_envs}])")
     assert log_probs.shape == (num_envs,)
     
     # Test critic
     values = policy.evaluate(critic_obs)
-    print(f"✓ Values shape: {values.shape} (expected: [{num_envs}, 1])")
+    print(f" Values shape: {values.shape} (expected: [{num_envs}, 1])")
     # print(f"  Values: {values}...")  # Print first 5 values
     assert values.shape == (num_envs, 1)
     
     # Test quantile evaluation
     quantiles = policy.evaluate_quantiles(critic_obs)
-    print(f"✓ Quantiles shape: {quantiles.shape} (expected: [{num_envs}, 1, {quantile_count}])")
+    print(f" Quantiles shape: {quantiles.shape} (expected: [{num_envs}, 1, {quantile_count}])")
     assert quantiles.shape == (num_envs, 1, quantile_count)
     
     # Test reset functionality
     dones = torch.tensor([1, 0, 1, 0, 0, 1, 0, 0], dtype=torch.bool, device=device)
     policy.reset(dones)
-    print("✓ Reset functionality working")
+    print(" Reset functionality working")
     
     # Test hidden states
     hidden_states = policy.get_hidden_states()
-    print(f"✓ Hidden states retrieved: {type(hidden_states)}")
+    print(f" Hidden states retrieved: {type(hidden_states)}")
     
-    print("Quantile_NN tests passed! ✓")
+    print("Quantile_NN tests passed! ")
 
 
 def test_dppo_initialization():
@@ -181,9 +183,9 @@ def test_dppo_initialization():
             device=device,
             **config
         )
-        print(f"    ✓ DPPO initialized with {config['distributional_loss_type']} loss")
+        print(f"     DPPO initialized with {config['distributional_loss_type']} loss")
     
-    print("DPPO initialization tests passed! ✓")
+    print("DPPO initialization tests passed! ")
 
 
 def test_dppo_storage():
@@ -221,30 +223,6 @@ def test_dppo_storage():
         quantile_loss_coef=0.5,
     )
 
-    # num_envs = 4
-    # num_steps = 24
-    # num_actor_obs = 36
-    # num_critic_obs = 36
-    # num_actions = 8
-    
-    # # Create policy and DPPO
-    # policy = Quantile_NN(
-    #     num_actor_obs=num_actor_obs,
-    #     num_critic_obs=num_critic_obs,
-    #     num_actions=num_actions,
-    #     quantile_count=32,
-    #     rnn_hidden_dim=16
-    # )
-    
-    # dppo = DPPO(
-    #     policy=policy,
-    #     num_learning_epochs=2,
-    #     num_mini_batches=4,
-    #     device=device,
-    #     distributional_loss_type="mse",
-    #     quantile_loss_coef=0.5
-    # )
-    
     # Initialize storage
     dppo.init_storage(
         training_type="dppo",
@@ -255,7 +233,7 @@ def test_dppo_storage():
         actions_shape=[num_actions]
     )
 
-    print(f"✓ Storage initialized: {type(dppo.storage)}")
+    print(f" Storage initialized: {type(dppo.storage)}")
     
     # Create mock environment
     env = MockEnv(num_envs, num_actor_obs, num_actions)
@@ -281,12 +259,12 @@ def test_dppo_storage():
     last_critic_obs = torch.randn(num_envs, num_critic_obs, device=device)
     dppo.compute_returns(last_critic_obs)
     
-    print(f"✓ Rollout completed: {num_steps} steps")
+    print(f" Rollout completed: {num_steps} steps")
     
     # Test update
     loss_dict = dppo.update()
     
-    print("✓ Update completed")
+    print(" Update completed")
     print("  Loss components:")
     for key, value in loss_dict.items():
         print(f"    {key}: {value:.4f}")
@@ -295,7 +273,7 @@ def test_dppo_storage():
     expected_keys = {"value_function", "surrogate", "entropy", "distributional"}
     assert expected_keys.issubset(set(loss_dict.keys())), f"Missing loss keys: {expected_keys - set(loss_dict.keys())}"
     
-    print("DPPO storage tests passed! ✓")
+    print("DPPO storage tests passed! ")
 
 
 def test_distributional_losses():
@@ -335,11 +313,11 @@ def test_distributional_losses():
         # Compute loss
         loss = dppo.compute_distributional_loss(predicted_quantiles, target_values)
         
-        print(f"    ✓ {loss_type} loss computed: {loss.item():.4f}")
+        print(f"     {loss_type} loss computed: {loss.item():.4f}")
         assert not torch.isnan(loss), f"{loss_type} loss is NaN"
         assert loss.item() >= 0, f"{loss_type} loss is negative: {loss.item()}"
     
-    print("Distributional loss tests passed! ✓")
+    print("Distributional loss tests passed! ")
 
 
 def test_quantile_visualization():
@@ -371,8 +349,8 @@ def test_quantile_visualization():
     quantiles = critic(test_inputs, distribution=True)
     values = critic(test_inputs, distribution=False)
     
-    print(f"✓ Quantile distributions computed: {quantiles.shape}")
-    print(f"✓ Scalar values computed: {values.shape}")
+    print(f" Quantile distributions computed: {quantiles.shape}")
+    print(f" Scalar values computed: {values.shape}")
     
     # Print statistics for each state
     state_names = ["Good", "Bad", "Neutral", "Uncertain"]
@@ -387,13 +365,48 @@ def test_quantile_visualization():
         print(f"    Q75: {np.percentile(q, 75):.3f}")
         print(f"    Range: [{q.min():.3f}, {q.max():.3f}]")
     
-    print("Quantile visualization tests passed! ✓")
+    print("Quantile visualization tests passed! ")
+
+
+def run_single_epoch_rollout(dppo: DPPO, env: MockEnv, num_steps: int, num_critic_obs: int) -> Tuple[float, Dict[str, float]]:
+    """
+    Run a single epoch of rollout and update
+    
+    Returns:
+        rollout_time: Time taken for rollout
+        loss_dict: Dictionary of loss components
+    """
+    device = "cuda"
+    
+    # Start rollout
+    rollout_start = time.time()
+    
+    obs = env.reset()
+    for step in range(num_steps):
+        critic_obs = torch.randn(env.num_envs, num_critic_obs, device=device)
+        actions = dppo.act(obs, critic_obs)
+        
+        # Simulate environment step
+        obs, rewards, dones, infos = env.step(actions)
+        dppo.process_env_step(rewards, dones, infos)
+    
+    rollout_time = time.time() - rollout_start
+    
+    # Compute returns and update
+    last_critic_obs = torch.randn(env.num_envs, num_critic_obs, device=device)
+    dppo.compute_returns(last_critic_obs)
+    
+    update_start = time.time()
+    loss_dict = dppo.update()
+    update_time = time.time() - update_start
+    
+    return rollout_time, update_time, loss_dict
 
 
 def run_performance_test():
-    """Run performance benchmarks"""
+    """Run single epoch performance benchmarks"""
     print("=" * 50)
-    print("Running performance tests...")
+    print("Running single-epoch performance tests...")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -434,47 +447,18 @@ def run_performance_test():
         actions_shape=[num_actions]
     )
     
-    # Timing test
-    import time
+    # Create environment
+    env = MockEnv(num_envs, num_actor_obs, num_actions)
     
     # Warmup
     obs = torch.randn(num_envs, num_actor_obs, device=device)
     critic_obs = torch.randn(num_envs, num_critic_obs, device=device)
     _ = dppo.act(obs, critic_obs)
     
-    # Time rollout
-    start_time = time.time()
+    # Run single epoch
+    rollout_time, update_time, loss_dict = run_single_epoch_rollout(dppo, env, num_steps, num_critic_obs)
     
-    obs = torch.randn(num_envs, num_actor_obs, device=device)
-    for step in range(num_steps):
-        critic_obs = torch.randn(num_envs, num_critic_obs, device=device)
-        actions = dppo.act(obs, critic_obs)
-        
-        # Simulate environment step
-        rewards = torch.randn(num_envs, 1, device=device)
-        rewards = rewards.squeeze(1)
-        
-        # dones = torch.zeros(num_envs, 1, dtype=torch.bool, device=device)
-        # infos = {"time_outs": torch.zeros_like(dones, dtype=torch.float)}
-        dones = torch.zeros(num_envs, 1, dtype=torch.float, device=device)
-        infos = {"time_outs": torch.zeros_like(dones, dtype=torch.float).squeeze(1)}
-        dones = dones.squeeze(1)
-
-
-        dppo.process_env_step(rewards, dones, infos)
-        obs = torch.randn(num_envs, num_actor_obs, device=device)
-    
-    rollout_time = time.time() - start_time
-    
-    # Time update
-    last_critic_obs = torch.randn(num_envs, num_critic_obs, device=device)
-    dppo.compute_returns(last_critic_obs)
-    
-    start_time = time.time()
-    loss_dict = dppo.update()
-    update_time = time.time() - start_time
-    
-    print(f"✓ Performance test completed:")
+    print(f" Single-epoch performance test completed:")
     print(f"  Environments: {num_envs}")
     print(f"  Steps: {num_steps}")
     print(f"  Quantiles: {quantile_count}")
@@ -482,6 +466,210 @@ def run_performance_test():
     print(f"  Update time: {update_time:.3f}s")
     print(f"  Total samples: {num_envs * num_steps}")
     print(f"  Samples per second: {(num_envs * num_steps) / rollout_time:.1f}")
+
+
+def run_multi_epoch_performance_test(num_epochs: int = 10):
+    """
+    Run multi-epoch performance test to evaluate training stability and performance over time
+    
+    Args:
+        num_epochs: Number of training epochs to run
+    """
+    print("=" * 60)
+    print(f"Running multi-epoch performance test ({num_epochs} epochs)...")
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # Test parameters
+    num_envs = 256
+    num_steps = 128
+    num_actor_obs = 48
+    num_critic_obs = 64
+    num_actions = 12
+    quantile_count = 100
+    
+    # Create policy and algorithm
+    policy = Quantile_NN(
+        num_actor_obs=num_actor_obs,
+        num_critic_obs=num_critic_obs,
+        num_actions=num_actions,
+        quantile_count=quantile_count,
+        actor_hidden_dims=[512, 512, 256],
+        critic_hidden_dims=[1024, 512, 256],
+        rnn_hidden_dim=256,
+        measure_kwargs={"beta": 0.0}
+    )
+    
+    dppo = DPPO(
+        policy=policy,
+        num_learning_epochs=8,
+        num_mini_batches=16,
+        device=device,
+        distributional_loss_type="mse",
+        quantile_loss_coef=1.0,
+        learning_rate=3e-4,
+        gamma=0.99,
+        lam=0.95,
+        clip_param=0.2,
+        entropy_coef=0.01,
+        value_loss_coef=0.5,
+        max_grad_norm=1.0
+    )
+    
+    # Initialize storage
+    dppo.init_storage(
+        training_type="dppo",
+        num_envs=num_envs,
+        num_transitions_per_env=num_steps,
+        actor_obs_shape=[num_actor_obs],
+        critic_obs_shape=[num_critic_obs],
+        actions_shape=[num_actions]
+    )
+    
+    # Create environment
+    env = MockEnv(num_envs, num_actor_obs, num_actions)
+    
+    # Performance tracking
+    epoch_times = []
+    rollout_times = []
+    update_times = []
+    loss_history = {
+        'value_function': [],
+        'surrogate': [],
+        'entropy': [],
+        'distributional': []
+    }
+    
+    # Warmup
+    print("Warming up...")
+    obs = torch.randn(num_envs, num_actor_obs, device=device)
+    critic_obs = torch.randn(num_envs, num_critic_obs, device=device)
+    _ = dppo.act(obs, critic_obs)
+    
+    print(f"Starting {num_epochs} epochs of training...")
+    total_start_time = time.time()
+    
+    # Multi-epoch training loop
+    for epoch in range(num_epochs):
+        epoch_start_time = time.time()
+        
+        # Run rollout and update
+        rollout_time, update_time, loss_dict = run_single_epoch_rollout(
+            dppo, env, num_steps, num_critic_obs
+        )
+        
+        epoch_time = time.time() - epoch_start_time
+        
+        # Track performance
+        epoch_times.append(epoch_time)
+        rollout_times.append(rollout_time)
+        update_times.append(update_time)
+        
+        # Track losses
+        for key in loss_history.keys():
+            if key in loss_dict:
+                loss_history[key].append(loss_dict[key])
+            else:
+                loss_history[key].append(0.0)  # Default value if loss not present
+        
+        # Progress reporting
+        if (epoch + 1) % max(1, num_epochs // 10) == 0 or epoch == 0:
+            samples_per_sec = (num_envs * num_steps) / rollout_time
+            print(f"  Epoch {epoch+1:3d}/{num_epochs}: "
+                  f"Total: {epoch_time:.3f}s, "
+                  f"Rollout: {rollout_time:.3f}s, "
+                  f"Update: {update_time:.3f}s, "
+                  f"SPS: {samples_per_sec:.0f}, "
+                  f"VF Loss: {loss_dict.get('value_function', 0):.4f}")
+    
+    total_time = time.time() - total_start_time
+    
+    # Performance analysis
+    print("\n" + "=" * 60)
+    print("MULTI-EPOCH PERFORMANCE ANALYSIS")
+    print("=" * 60)
+    
+    # Basic statistics
+    total_samples = num_epochs * num_envs * num_steps
+    avg_epoch_time = np.mean(epoch_times)
+    avg_rollout_time = np.mean(rollout_times)
+    avg_update_time = np.mean(update_times)
+    avg_samples_per_sec = (num_envs * num_steps) / avg_rollout_time
+    
+    print(f"Configuration:")
+    print(f"  Epochs: {num_epochs}")
+    print(f"  Environments: {num_envs}")
+    print(f"  Steps per epoch: {num_steps}")
+    print(f"  Quantiles: {quantile_count}")
+    print(f"  Total samples processed: {total_samples:,}")
+    
+    print(f"\nTiming Statistics:")
+    print(f"  Total training time: {total_time:.2f}s")
+    print(f"  Average epoch time: {avg_epoch_time:.3f}s � {np.std(epoch_times):.3f}s")
+    print(f"  Average rollout time: {avg_rollout_time:.3f}s � {np.std(rollout_times):.3f}s")
+    print(f"  Average update time: {avg_update_time:.3f}s � {np.std(update_times):.3f}s")
+    print(f"  Average samples/sec: {avg_samples_per_sec:.0f} � {np.std([(num_envs * num_steps) / t for t in rollout_times]):.0f}")
+    
+    # Performance stability
+    rollout_cv = np.std(rollout_times) / np.mean(rollout_times) * 100
+    update_cv = np.std(update_times) / np.mean(update_times) * 100
+    
+    print(f"\nPerformance Stability (Coefficient of Variation):")
+    print(f"  Rollout time CV: {rollout_cv:.2f}%")
+    print(f"  Update time CV: {update_cv:.2f}%")
+    
+    # Loss statistics
+    print(f"\nLoss Statistics:")
+    for loss_name, values in loss_history.items():
+        if values and any(v != 0 for v in values):
+            values_array = np.array(values)
+            print(f"  {loss_name.replace('_', ' ').title()}:")
+            print(f"    Initial: {values[0]:.6f}, Final: {values[-1]:.6f}")
+            print(f"    Mean: {np.mean(values_array):.6f} � {np.std(values_array):.6f}")
+            print(f"    Min: {np.min(values_array):.6f}, Max: {np.max(values_array):.6f}")
+    
+    # Memory usage (if CUDA)
+    if torch.cuda.is_available():
+        print(f"\nGPU Memory:")
+        print(f"  Allocated: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+        print(f"  Cached: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+        print(f"  Max allocated: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
+    
+    # Performance trends
+    if num_epochs >= 5:
+        # Check for performance degradation
+        first_half_avg = np.mean(rollout_times[:num_epochs//2])
+        second_half_avg = np.mean(rollout_times[num_epochs//2:])
+        performance_change = ((second_half_avg - first_half_avg) / first_half_avg) * 100
+        
+        print(f"\nPerformance Trends:")
+        print(f"  First half avg rollout time: {first_half_avg:.3f}s")
+        print(f"  Second half avg rollout time: {second_half_avg:.3f}s")
+        print(f"  Performance change: {performance_change:+.2f}%")
+        
+        if abs(performance_change) > 10:
+            print(f"  �  Significant performance change detected!")
+        else:
+            print(f"   Stable performance across epochs")
+    
+    # Efficiency metrics
+    print(f"\nEfficiency Metrics:")
+    print(f"  Time per sample: {total_time / total_samples * 1000:.4f} ms")
+    print(f"  Updates per second: {num_epochs / total_time:.2f}")
+    print(f"  Rollout efficiency: {avg_rollout_time / avg_epoch_time * 100:.1f}% of epoch time")
+    print(f"  Update efficiency: {avg_update_time / avg_epoch_time * 100:.1f}% of epoch time")
+    
+    print("\nMulti-epoch performance test completed! ")
+    
+    return {
+        'epoch_times': epoch_times,
+        'rollout_times': rollout_times,
+        'update_times': update_times,
+        'loss_history': loss_history,
+        'total_time': total_time,
+        'avg_samples_per_sec': avg_samples_per_sec
+    }
 
 
 def main():
@@ -492,6 +680,7 @@ def main():
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"CUDA device: {torch.cuda.get_device_name()}")
+        print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
     try:
         # Core functionality tests
@@ -502,15 +691,21 @@ def main():
         test_distributional_losses()
         # test_quantile_visualization()
         
-        # Performance test
+        # Single epoch performance test
         run_performance_test()
         
+        # Multi-epoch performance test
+        print("\n" + "=�" * 20)
+        print("Starting comprehensive multi-epoch performance testing...")
+        results = run_multi_epoch_performance_test(num_epochs=20)
+        
         print("\n" + "=" * 50)
-        print("🎉 All tests passed successfully!")
+        print(" All tests passed successfully!")
         print("DPPO implementation is working correctly.")
+        print(f"Average performance: {results['avg_samples_per_sec']:.0f} samples/sec")
         
     except Exception as e:
-        print(f"\n❌ Test failed with error: {e}")
+        print(f"\nL Test failed with error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
