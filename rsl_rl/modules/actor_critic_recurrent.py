@@ -73,11 +73,11 @@ class ActorCriticRecurrent(ActorCritic):
         return super().act_inference(input_a.squeeze(0))
 
     def evaluate(self, critic_observations, masks=None, hidden_states=None):
-        print(f"Critic_obs: {critic_observations.shape}")
-        print(f"Masks: {masks.shape if masks is not None else 'None'}")
-        print(f"Hidden_states: {len(hidden_states) if hidden_states is not None else 'None'}")
+        # print(f"Critic_obs: {critic_observations.shape}")
+        # print(f"Masks: {masks.shape if masks is not None else 'None'}")
+        # print(f"Hidden_states: {len(hidden_states) if hidden_states is not None else 'None'}")
         input_c = self.memory_c(critic_observations, masks, hidden_states)
-        print(f"Input C: {input_c.shape}")
+        # print(f"Input C: {input_c.shape}")
         return super().evaluate(input_c.squeeze(0))
 
     def get_hidden_states(self):

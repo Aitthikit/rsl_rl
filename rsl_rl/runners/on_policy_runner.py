@@ -217,7 +217,6 @@ class OnPolicyRunner:
                     actions = self.alg.act(obs, privileged_obs)
                     # Step the environment
                     obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
-                    print("obs shape:", obs.shape)
                     # Move to device
                     obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
                     # perform normalization
@@ -271,9 +270,12 @@ class OnPolicyRunner:
                 # compute returns
                 if self.training_type == "rl":
                     self.alg.compute_returns(privileged_obs)
+                if self.training_type == "dppo":
+                    self.alg.compute_returns(privileged_obs)
 
             # update policy
             loss_dict = self.alg.update()
+            print(f"Losses: {loss_dict}")
 
             stop = time.time()
             learn_time = stop - start

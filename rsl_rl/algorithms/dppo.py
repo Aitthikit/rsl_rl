@@ -37,7 +37,7 @@ class DPPO:
         device="cuda",
         normalize_advantage_per_mini_batch=False,
         # Distributional parameters
-        distributional_loss_type="mse",  # "mse", "huber", "energy"
+        distributional_loss_type="energy",  # "mse", "huber", "energy"
         huber_delta=1.0,
         quantile_loss_coef=1.0,
         # RND parameters
@@ -137,8 +137,7 @@ class DPPO:
     def act(self, obs, critic_obs):
         if self.policy.is_recurrent:
             self.transition.hidden_states = self.policy.get_hidden_states()
-            print(f"Hidden states: {len(self.transition.hidden_states)}")
-        
+
         # Compute actions and values
         self.transition.actions = self.policy.act(obs).detach()
         self.transition.values = self.policy.evaluate(critic_obs).detach()
@@ -196,6 +195,7 @@ class DPPO:
         
         elif self.distributional_loss_type == "energy":
             # Energy loss between distributions
+            print(f"Predicted quantiles shape: {predicted_quantiles.shape}, Target values shape: {target_expanded.shape}")
             loss = energy_loss(predicted_quantiles.reshape(-1, quantile_count), 
                              target_expanded.reshape(-1, quantile_count))
         
@@ -217,7 +217,6 @@ class DPPO:
 
         # Generator for mini batches
         if self.policy.is_recurrent:
-            print("Using recurrent mini batch generator")
             generator = self.storage.recurrent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
@@ -237,28 +236,24 @@ class DPPO:
             masks_batch,
             rnd_state_batch,
         ) in generator:
-            old_actions_log_prob_batch = old_actions_log_prob_batch.detach()
-            target_values_batch        = target_values_batch.detach()
-            advantages_batch           = advantages_batch.detach()
-            returns_batch              = returns_batch.detach()
-            old_mu_batch               = old_mu_batch.detach()
-            old_sigma_batch            = old_sigma_batch.detach()
-            hid_states_batch           = hid_states_batch
-
-            print("HIDDDDDDDDDDDDDDDD",hid_states_batch)
-
-            print("HEEEEEEEEEEEEEEEEE",hid_states_batch[1])
+            # old_actions_log_prob_batch = old_actions_log_prob_batch.detach()
+            # target_values_batch        = target_values_batch.detach()
+            # advantages_batch           = advantages_batch.detach()
+            # returns_batch              = returns_batch.detach()
+            # old_mu_batch               = old_mu_batch.detach()
+            # old_sigma_batch            = old_sigma_batch.detach()
+            # hid_states_batch           = hid_states_batch
 
             # Make sure hidden states are detached from previous graphs
-            # if hid_states_batch is not None:
-            #     if isinstance(hid_states_batch, (list, tuple)):
-            #         hid_states_batch = [
-            #             tuple(x.detach() if x is not None else None for x in h) if isinstance(h, (list, tuple))
-            #             else (h.detach() if h is not None else None)
-            #             for h in hid_states_batch
-            #         ]
-            #     else:
-            #         hid_states_batch = hid_states_batch.detach()
+            if hid_states_batch is not None:
+                if isinstance(hid_states_batch, (list, tuple)):
+                    hid_states_batch = [
+                        tuple(x.detach() if x is not None else None for x in h) if isinstance(h, (list, tuple))
+                        else (h.detach() if h is not None else None)
+                        for h in hid_states_batch
+                    ]
+                else:
+                    hid_states_batch = hid_states_batch.detach()
 
             num_aug = 1
             original_batch_size = obs_batch.shape[0]
@@ -289,7 +284,6 @@ class DPPO:
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             
             # Get both scalar values and quantile distributions
-            print("critic_obs_batch shape:", critic_obs_batch.shape)
             value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
             quantiles_batch = self.policy.evaluate_quantiles(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
             
@@ -339,7 +333,6 @@ class DPPO:
             # Value function loss (using scalar values)
             # TODO: Split function from forward to compute loss 
             if self.use_clipped_value_loss:
-                print("Clippp",target_values_batch.shape, value_batch.shape)
                 value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
                     -self.clip_param, self.clip_param
                 )
@@ -404,8 +397,8 @@ class DPPO:
             loss.backward()
 
             # Collect gradients from all GPUs
-            # if self.is_multi_gpu:
-            #     self.reduce_parameters()
+            if self.is_multi_gpu:
+                self.reduce_parameters()
 
             # Apply gradients
             nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
