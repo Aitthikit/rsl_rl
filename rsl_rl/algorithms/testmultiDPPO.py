@@ -524,7 +524,9 @@ def run_multi_epoch_performance_test(num_epochs: int = 10):
         num_transitions_per_env=num_steps,
         actor_obs_shape=[num_actor_obs],
         critic_obs_shape=[num_critic_obs],
-        actions_shape=[num_actions]
+        actions_shape=[num_actions],
+        distributional_loss_type="energy",
+        quantile_count=quantile_count,  # Example loss type
     )
     
     # Create environment

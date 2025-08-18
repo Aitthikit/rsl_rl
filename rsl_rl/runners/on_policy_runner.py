@@ -118,8 +118,21 @@ class OnPolicyRunner:
             self.obs_normalizer = torch.nn.Identity().to(self.device)  # no normalization
             self.privileged_obs_normalizer = torch.nn.Identity().to(self.device)  # no normalization
 
-        # init storage and model
-        self.alg.init_storage(
+        if self.training_type == "dppo":
+            # if using DPPO, we need to pass the quantile count to the storage
+            self.alg.init_storage(
+                self.training_type,
+                self.env.num_envs,
+                self.num_steps_per_env,
+                [num_obs],
+                [num_privileged_obs],
+                [self.env.num_actions],
+                distributional_loss_type=self.alg_cfg["distributional_loss_type"],
+                quantile_count=self.policy_cfg["quantile_count"],  # default quantile count
+            )
+        else:
+            # init storage and model
+            self.alg.init_storage(
             self.training_type,
             self.env.num_envs,
             self.num_steps_per_env,
@@ -127,7 +140,6 @@ class OnPolicyRunner:
             [num_privileged_obs],
             [self.env.num_actions],
         )
-
         # Decide whether to disable logging
         # We only log from the process with rank 0 (main process)
         self.disable_logs = self.is_distributed and self.gpu_global_rank != 0

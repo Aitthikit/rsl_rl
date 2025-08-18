@@ -12,6 +12,7 @@ from rsl_rl.networks import Memory
 from torch.distributions import Normal
 from typing import List, Union, Tuple, Callable
 
+
 from rsl_rl.utils import resolve_nn_activation
 
 eps = torch.finfo(torch.float32).eps
@@ -353,6 +354,10 @@ class Quantile_NN(nn.Module):
     def evaluate_quantiles(self, critic_observations, masks=None, hidden_states=None):
         """Get full quantile distribution."""
         return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=True)
+
+    def get_last_quantiles(self):
+        """Get last quantiles from critic."""
+        return self.critic.last_quantiles
 
     def get_hidden_states(self):
         return self.memory_a.hidden_states, self.critic.get_hidden_states()

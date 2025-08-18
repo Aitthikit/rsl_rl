@@ -67,26 +67,26 @@ def split_and_pad_trajectories(tensor, dones):
     dones[-1] = 1
     # Permute the buffers to have order (num_envs, num_transitions_per_env, ...), for correct reshaping
     flat_dones = dones.transpose(1, 0).reshape(-1, 1)
-    print(f"Flat dones shape: {flat_dones.shape}")
+    # print(f"Flat dones shape: {flat_dones.shape}")
 
     # Get length of trajectory by counting the number of successive not done elements
     done_indices = torch.cat((flat_dones.new_tensor([-1], dtype=torch.int64), flat_dones.nonzero()[:, 0]))
-    print(f"Done indices: {done_indices}")
+    # print(f"Done indices: {done_indices}")
     # Get the lengths of the trajectories by subtracting the indices
     trajectory_lengths = done_indices[1:] - done_indices[:-1]
     trajectory_lengths_list = trajectory_lengths.tolist()
-    print(f"Trajectories lengths: {len(trajectory_lengths_list)}")
+    # print(f"Trajectories lengths: {len(trajectory_lengths_list)}")
     # Extract the individual trajectories
     trajectories = torch.split(tensor.transpose(1, 0).flatten(0, 1), trajectory_lengths_list)
     # add at least one full length trajectory
-    print(f"Trajectories First: {len(trajectories)}")
+    # print(f"Trajectories First: {len(trajectories)}")
     trajectories = trajectories + (torch.zeros(tensor.shape[0], *tensor.shape[2:], device=tensor.device),)
-    print(f"Trajectories After add: {len(trajectories)}")
+    # print(f"Trajectories After add: {len(trajectories)}")
     # pad the trajectories to the length of the longest trajectory
     padded_trajectories = torch.nn.utils.rnn.pad_sequence(trajectories)
     # remove the added tensor
     padded_trajectories = padded_trajectories[:, :-1]
-    print(f"Padded trajectories shape: {padded_trajectories.shape}")
+    # print(f"Padded trajectories shape: {padded_trajectories.shape}")
 
     trajectory_masks = trajectory_lengths > torch.arange(0, tensor.shape[0], device=tensor.device).unsqueeze(1)
     return padded_trajectories, trajectory_masks

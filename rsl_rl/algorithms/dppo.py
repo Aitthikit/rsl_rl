@@ -11,6 +11,7 @@ from rsl_rl.utils.recurrency import trajectories_to_transitions, transitions_to_
 from rsl_rl.modules.rnd import RandomNetworkDistillation
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import string_to_callable
+from rsl_rl.utils.quantile_distribution import QuantileDistribution
 
 import torch.optim as optim
 
@@ -116,7 +117,7 @@ class DPPO:
         self.quantile_loss_coef = quantile_loss_coef
 
     def init_storage(
-        self, training_type, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, actions_shape
+        self, training_type, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, actions_shape, distributional_loss_type=None ,quantile_count=200
     ):
         if self.rnd:
             rnd_state_shape = [self.rnd.num_states]
@@ -132,6 +133,8 @@ class DPPO:
             actions_shape,
             rnd_state_shape,
             self.device,
+            distributional_loss_type,
+            quantile_count,
         )
 
     def act(self, obs, critic_obs):
@@ -141,6 +144,7 @@ class DPPO:
         # Compute actions and values
         self.transition.actions = self.policy.act(obs).detach()
         self.transition.values = self.policy.evaluate(critic_obs).detach()
+        self.transition.values_quant = self.policy.get_last_quantiles().detach().reshape(self.transition.values.shape[0], -1)
         self.transition.actions_log_prob = self.policy.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.policy.action_mean.detach()
         self.transition.action_sigma = self.policy.action_std.detach()
@@ -173,8 +177,9 @@ class DPPO:
 
     def compute_returns(self, last_critic_obs):
         last_values = self.policy.evaluate(last_critic_obs).detach()
+        last_values_quant = self.policy.get_last_quantiles().detach().reshape(last_values.shape[0], -1)
         self.storage.compute_returns(
-            last_values, self.gamma, self.lam, normalize_advantage=not self.normalize_advantage_per_mini_batch
+            last_values, self.gamma, self.lam, normalize_advantage=not self.normalize_advantage_per_mini_batch,last_values_quant=last_values_quant
         )
 
     def compute_distributional_loss(self, predicted_quantiles, target_values):
@@ -195,9 +200,9 @@ class DPPO:
         
         elif self.distributional_loss_type == "energy":
             # Energy loss between distributions
-            print(f"Predicted quantiles shape: {predicted_quantiles.shape}, Target values shape: {target_expanded.shape}")
-            loss = energy_loss(predicted_quantiles.reshape(-1, quantile_count), 
-                             target_expanded.reshape(-1, quantile_count))
+            quant , idx = QuantileDistribution(predicted_quantiles).sample(sample_count=100)
+            # print(f"Predicted quantiles shape: {quant.shape}, Target values shape: {target_expanded.shape}")
+            loss = energy_loss(quant, target_expanded)
         
         else:
             raise ValueError(f"Unknown distributional loss type: {self.distributional_loss_type}")
@@ -235,6 +240,7 @@ class DPPO:
             hid_states_batch,
             masks_batch,
             rnd_state_batch,
+            values_quant_batch,
         ) in generator:
             # old_actions_log_prob_batch = old_actions_log_prob_batch.detach()
             # target_values_batch        = target_values_batch.detach()
@@ -343,7 +349,10 @@ class DPPO:
                 value_loss = (returns_batch - value_batch).pow(2).mean()
 
             # Distributional loss (using quantile distributions)
-            distributional_loss = self.compute_distributional_loss(quantiles_batch, returns_batch)
+            if self.distributional_loss_type == "energy":
+                distributional_loss = self.compute_distributional_loss(quantiles_batch, values_quant_batch)
+            else:
+                distributional_loss = self.compute_distributional_loss(quantiles_batch, returns_batch)
 
             # Total loss
             loss = (surrogate_loss + 

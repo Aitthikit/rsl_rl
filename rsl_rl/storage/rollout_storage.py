@@ -8,6 +8,7 @@ from __future__ import annotations
 import torch
 
 from rsl_rl.utils import split_and_pad_trajectories
+from rsl_rl.utils.quantile_distribution import QuantileDistribution
 
 
 class RolloutStorage:
@@ -25,6 +26,8 @@ class RolloutStorage:
             self.action_sigma = None
             self.hidden_states = None
             self.rnd_state = None
+            self.values_quant = None
+            self.values_target_quant = None
 
         def clear(self):
             self.__init__()
@@ -39,6 +42,8 @@ class RolloutStorage:
         actions_shape,
         rnd_state_shape=None,
         device="cpu",
+        loss_type=None,
+        quantile_count=200,
     ):
         # store inputs
         self.training_type = training_type
@@ -49,7 +54,8 @@ class RolloutStorage:
         self.privileged_obs_shape = privileged_obs_shape
         self.rnd_state_shape = rnd_state_shape
         self.actions_shape = actions_shape
-
+        self.loss_type = loss_type
+        self.quantile_count = quantile_count
         # Core
         self.observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
         if privileged_obs_shape is not None:
@@ -83,6 +89,7 @@ class RolloutStorage:
             self.sigma = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
             self.returns = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
             self.advantages = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+            self.values_quant = torch.zeros(num_transitions_per_env, num_envs, quantile_count, device=self.device)
 
         # For RND
         if rnd_state_shape is not None:
@@ -125,6 +132,9 @@ class RolloutStorage:
             self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
             self.mu[self.step].copy_(transition.action_mean)
             self.sigma[self.step].copy_(transition.action_sigma)
+            # print("values_quant",transition.values_quant.shape)
+            # print("self.values_quant",self.values_quant.shape)
+            self.values_quant[self.step].copy_(transition.values_quant)
 
         # For RND
         if self.rnd_state_shape is not None:
@@ -165,29 +175,69 @@ class RolloutStorage:
     def clear(self):
         self.step = 0
 
-    def compute_returns(self, last_values, gamma, lam, normalize_advantage: bool = True):
-        advantage = 0
-        for step in reversed(range(self.num_transitions_per_env)):
-            # if we are at the last step, bootstrap the return value
-            if step == self.num_transitions_per_env - 1:
-                next_values = last_values
-            else:
-                next_values = self.values[step + 1]
-            # 1 if we are not in a terminal state, 0 otherwise
-            next_is_not_terminal = 1.0 - self.dones[step].float()
-            # TD error: r_t + gamma * V(s_{t+1}) - V(s_t)
-            delta = self.rewards[step] + next_is_not_terminal * gamma * next_values - self.values[step]
-            # Advantage: A(s_t, a_t) = delta_t + gamma * lambda * A(s_{t+1}, a_{t+1})
-            advantage = delta + next_is_not_terminal * gamma * lam * advantage
-            # Return: R_t = A(s_t, a_t) + V(s_t)
-            self.returns[step] = advantage + self.values[step]
+    def compute_returns(self, last_values, gamma, lam, normalize_advantage: bool = True, last_values_quant=None):
+        if self.training_type == "dppo":
+            advantage = 0
+            if self.loss_type == "energy":
+                # Energy loss between distributions
+                value_quants_idx = [QuantileDistribution(entry).sample(100) for entry in self.values_quant]
+                value_quants = torch.stack([entry[0] for entry in value_quants_idx])
+                final_value_quants = last_values_quant
+                next_value_quants, idx = QuantileDistribution(final_value_quants).sample(100)
+                value_target_quants = torch.zeros(len(self.values_quant), *next_value_quants.shape, device=self.device)
+            for step in reversed(range(self.num_transitions_per_env)):
+                # if we are at the last step, bootstrap the return value
+                if step == self.num_transitions_per_env - 1:
+                    next_values = last_values
+                else:
+                    next_values = self.values[step + 1]
+                # 1 if we are not in a terminal state, 0 otherwise
+                next_is_not_terminal = 1.0 - self.dones[step].float()
+                # TD error: r_t + gamma * V(s_{t+1}) - V(s_t)
+                delta = self.rewards[step] + next_is_not_terminal * gamma * next_values - self.values[step]
+                # Advantage: A(s_t, a_t) = delta_t + gamma * lambda * A(s_{t+1}, a_{t+1})
+                advantage = delta + next_is_not_terminal * gamma * lam * advantage
+                # Return: R_t = A(s_t, a_t) + V(s_t)
+                self.returns[step] = advantage + self.values[step]
+            
+                value_target_quants[step] = self.rewards[step] + (1.0 - self.dones[step].float()) * gamma * next_value_quants
 
-        # Compute the advantages
-        self.advantages = self.returns - self.values
-        # Normalize the advantages if flag is set
-        # This is to prevent double normalization (i.e. if per minibatch normalization is used)
-        if normalize_advantage:
-            self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+                preserved_value_quants = (1.0 - self.dones[step]).bool() * (
+                    torch.rand(next_value_quants.shape, device=self.device) < lam
+                )
+                next_value_quants = torch.where(preserved_value_quants, value_target_quants[step], value_quants[step])
+
+            self.values_target_quant = value_target_quants
+            # Compute the advantages
+            self.advantages = self.returns - self.values
+            # Normalize the advantages if flag is set
+            # This is to prevent double normalization (i.e. if per minibatch normalization is used)
+            if normalize_advantage:
+                self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+        else:
+            advantage = 0
+            for step in reversed(range(self.num_transitions_per_env)):
+                # if we are at the last step, bootstrap the return value
+                if step == self.num_transitions_per_env - 1:
+                    next_values = last_values
+                else:
+                    next_values = self.values[step + 1]
+                # 1 if we are not in a terminal state, 0 otherwise
+                next_is_not_terminal = 1.0 - self.dones[step].float()
+                # TD error: r_t + gamma * V(s_{t+1}) - V(s_t)
+                delta = self.rewards[step] + next_is_not_terminal * gamma * next_values - self.values[step]
+                # Advantage: A(s_t, a_t) = delta_t + gamma * lambda * A(s_{t+1}, a_{t+1})
+                advantage = delta + next_is_not_terminal * gamma * lam * advantage
+                # Return: R_t = A(s_t, a_t) + V(s_t)
+                self.returns[step] = advantage + self.values[step]
+
+            # Compute the advantages
+            self.advantages = self.returns - self.values
+            # Normalize the advantages if flag is set
+            # This is to prevent double normalization (i.e. if per minibatch normalization is used)
+            if normalize_advantage:
+                self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+        
 
     # for distillation
     def generator(self):
@@ -263,84 +313,163 @@ class RolloutStorage:
                 yield obs_batch, privileged_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
                     None,
                     None,
-                ), None, rnd_state_batch
+                ), None, rnd_state_batch,None
 
     # for reinfrocement learning with recurrent networks
     def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
         if self.training_type != "rl" and self.training_type != "dppo":
             raise ValueError("This function is only available for reinforcement learning training.")
-        print(self.observations.shape, self.dones.shape)
-        padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
-        print("padded",padded_obs_trajectories.shape,trajectory_masks.shape)
-        if self.privileged_observations is not None:
-            padded_privileged_obs_trajectories, _ = split_and_pad_trajectories(self.privileged_observations, self.dones)
-        else:
-            padded_privileged_obs_trajectories = padded_obs_trajectories
+        if self.training_type == "dppo":
+            # print(self.observations.shape, self.dones.shape)
+            padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
+            # print("padded",padded_obs_trajectories.shape,trajectory_masks.shape)
+            if self.privileged_observations is not None:
+                padded_privileged_obs_trajectories, _ = split_and_pad_trajectories(self.privileged_observations, self.dones)
+            else:
+                padded_privileged_obs_trajectories = padded_obs_trajectories
 
-        if self.rnd_state_shape is not None:
-            padded_rnd_state_trajectories, _ = split_and_pad_trajectories(self.rnd_state, self.dones)
-        else:
-            padded_rnd_state_trajectories = None
+            if self.rnd_state_shape is not None:
+                padded_rnd_state_trajectories, _ = split_and_pad_trajectories(self.rnd_state, self.dones)
+            else:
+                padded_rnd_state_trajectories = None
 
-        mini_batch_size = self.num_envs // num_mini_batches
-        for ep in range(num_epochs):
-            first_traj = 0
-            for i in range(num_mini_batches):
-                start = i * mini_batch_size
-                stop = (i + 1) * mini_batch_size
-                
-                dones = self.dones.squeeze(-1)
-                last_was_done = torch.zeros_like(dones, dtype=torch.bool)
-                last_was_done[1:] = dones[:-1]
-                last_was_done[0] = True
-                trajectories_batch_size = torch.sum(last_was_done[:, start:stop])
-                last_traj = first_traj + trajectories_batch_size
+            mini_batch_size = self.num_envs // num_mini_batches
+            for ep in range(num_epochs):
+                first_traj = 0
+                for i in range(num_mini_batches):
+                    start = i * mini_batch_size
+                    stop = (i + 1) * mini_batch_size
+                    
+                    dones = self.dones.squeeze(-1)
+                    last_was_done = torch.zeros_like(dones, dtype=torch.bool)
+                    last_was_done[1:] = dones[:-1]
+                    last_was_done[0] = True
+                    trajectories_batch_size = torch.sum(last_was_done[:, start:stop])
+                    last_traj = first_traj + trajectories_batch_size
 
-                masks_batch = trajectory_masks[:, first_traj:last_traj]
-                obs_batch = padded_obs_trajectories[:, first_traj:last_traj]
-                privileged_obs_batch = padded_privileged_obs_trajectories[:, first_traj:last_traj]
+                    masks_batch = trajectory_masks[:, first_traj:last_traj]
+                    obs_batch = padded_obs_trajectories[:, first_traj:last_traj]
+                    privileged_obs_batch = padded_privileged_obs_trajectories[:, first_traj:last_traj]
 
-                if padded_rnd_state_trajectories is not None:
-                    rnd_state_batch = padded_rnd_state_trajectories[:, first_traj:last_traj]
-                else:
-                    rnd_state_batch = None
+                    if padded_rnd_state_trajectories is not None:
+                        rnd_state_batch = padded_rnd_state_trajectories[:, first_traj:last_traj]
+                    else:
+                        rnd_state_batch = None
 
-                actions_batch = self.actions[:, start:stop]
-                old_mu_batch = self.mu[:, start:stop]
-                old_sigma_batch = self.sigma[:, start:stop]
-                returns_batch = self.returns[:, start:stop]
-                advantages_batch = self.advantages[:, start:stop]
-                values_batch = self.values[:, start:stop]
-                old_actions_log_prob_batch = self.actions_log_prob[:, start:stop]
+                    actions_batch = self.actions[:, start:stop]
+                    old_mu_batch = self.mu[:, start:stop]
+                    old_sigma_batch = self.sigma[:, start:stop]
+                    returns_batch = self.returns[:, start:stop]
+                    advantages_batch = self.advantages[:, start:stop]
+                    values_batch = self.values[:, start:stop]
+                    old_actions_log_prob_batch = self.actions_log_prob[:, start:stop]
+                    values_quant_batch = self.values_target_quant[:, start:stop]
 
-                # reshape to [num_envs, time, num layers, hidden dim] (original shape: [time, num_layers, num_envs, hidden_dim])
-                # then take only time steps after dones (flattens num envs and time dimensions),
-                # take a batch of trajectories and finally reshape back to [num_layers, batch, hidden_dim]
-                last_was_done = last_was_done.permute(1, 0)
-                hid_a_batch = [
-                    saved_hidden_states.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
-                    .transpose(1, 0)
-                    .contiguous()
-                    for saved_hidden_states in self.saved_hidden_states_a
-                ]
-                # remove the tuple for GRU
-                hid_a_batch = hid_a_batch[0] if len(hid_a_batch) == 1 else hid_a_batch
-
-                if self.saved_hidden_states_c is not None:
-                    hid_c_batch = [
+                    # reshape to [num_envs, time, num layers, hidden dim] (original shape: [time, num_layers, num_envs, hidden_dim])
+                    # then take only time steps after dones (flattens num envs and time dimensions),
+                    # take a batch of trajectories and finally reshape back to [num_layers, batch, hidden_dim]
+                    last_was_done = last_was_done.permute(1, 0)
+                    hid_a_batch = [
                         saved_hidden_states.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
                         .transpose(1, 0)
                         .contiguous()
-                        for saved_hidden_states in self.saved_hidden_states_c
+                        for saved_hidden_states in self.saved_hidden_states_a
                     ]
-                    hid_c_batch = hid_c_batch[0] if len(hid_c_batch) == 1 else hid_c_batch
-                else:
-                    hid_c_batch = None
-                
+                    # remove the tuple for GRU
+                    hid_a_batch = hid_a_batch[0] if len(hid_a_batch) == 1 else hid_a_batch
 
-                yield obs_batch, privileged_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
-                    hid_a_batch,
-                    hid_c_batch,
-                ), masks_batch, rnd_state_batch
+                    if self.saved_hidden_states_c is not None:
+                        hid_c_batch = [
+                            saved_hidden_states.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
+                            .transpose(1, 0)
+                            .contiguous()
+                            for saved_hidden_states in self.saved_hidden_states_c
+                        ]
+                        hid_c_batch = hid_c_batch[0] if len(hid_c_batch) == 1 else hid_c_batch
+                    else:
+                        hid_c_batch = None
+                    
 
-                first_traj = last_traj
+                    yield obs_batch, privileged_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+                        hid_a_batch,
+                        hid_c_batch,
+                    ), masks_batch, rnd_state_batch , values_quant_batch
+
+                    first_traj = last_traj
+        else:
+            # print(self.observations.shape, self.dones.shape)
+            padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
+            # print("padded",padded_obs_trajectories.shape,trajectory_masks.shape)
+            if self.privileged_observations is not None:
+                padded_privileged_obs_trajectories, _ = split_and_pad_trajectories(self.privileged_observations, self.dones)
+            else:
+                padded_privileged_obs_trajectories = padded_obs_trajectories
+
+            if self.rnd_state_shape is not None:
+                padded_rnd_state_trajectories, _ = split_and_pad_trajectories(self.rnd_state, self.dones)
+            else:
+                padded_rnd_state_trajectories = None
+
+            mini_batch_size = self.num_envs // num_mini_batches
+            for ep in range(num_epochs):
+                first_traj = 0
+                for i in range(num_mini_batches):
+                    start = i * mini_batch_size
+                    stop = (i + 1) * mini_batch_size
+                    
+                    dones = self.dones.squeeze(-1)
+                    last_was_done = torch.zeros_like(dones, dtype=torch.bool)
+                    last_was_done[1:] = dones[:-1]
+                    last_was_done[0] = True
+                    trajectories_batch_size = torch.sum(last_was_done[:, start:stop])
+                    last_traj = first_traj + trajectories_batch_size
+
+                    masks_batch = trajectory_masks[:, first_traj:last_traj]
+                    obs_batch = padded_obs_trajectories[:, first_traj:last_traj]
+                    privileged_obs_batch = padded_privileged_obs_trajectories[:, first_traj:last_traj]
+
+                    if padded_rnd_state_trajectories is not None:
+                        rnd_state_batch = padded_rnd_state_trajectories[:, first_traj:last_traj]
+                    else:
+                        rnd_state_batch = None
+
+                    actions_batch = self.actions[:, start:stop]
+                    old_mu_batch = self.mu[:, start:stop]
+                    old_sigma_batch = self.sigma[:, start:stop]
+                    returns_batch = self.returns[:, start:stop]
+                    advantages_batch = self.advantages[:, start:stop]
+                    values_batch = self.values[:, start:stop]
+                    old_actions_log_prob_batch = self.actions_log_prob[:, start:stop]
+                    values_quant_batch = None
+
+                    # reshape to [num_envs, time, num layers, hidden dim] (original shape: [time, num_layers, num_envs, hidden_dim])
+                    # then take only time steps after dones (flattens num envs and time dimensions),
+                    # take a batch of trajectories and finally reshape back to [num_layers, batch, hidden_dim]
+                    last_was_done = last_was_done.permute(1, 0)
+                    hid_a_batch = [
+                        saved_hidden_states.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
+                        .transpose(1, 0)
+                        .contiguous()
+                        for saved_hidden_states in self.saved_hidden_states_a
+                    ]
+                    # remove the tuple for GRU
+                    hid_a_batch = hid_a_batch[0] if len(hid_a_batch) == 1 else hid_a_batch
+
+                    if self.saved_hidden_states_c is not None:
+                        hid_c_batch = [
+                            saved_hidden_states.permute(2, 0, 1, 3)[last_was_done][first_traj:last_traj]
+                            .transpose(1, 0)
+                            .contiguous()
+                            for saved_hidden_states in self.saved_hidden_states_c
+                        ]
+                        hid_c_batch = hid_c_batch[0] if len(hid_c_batch) == 1 else hid_c_batch
+                    else:
+                        hid_c_batch = None
+                    
+
+                    yield obs_batch, privileged_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+                        hid_a_batch,
+                        hid_c_batch,
+                    ), masks_batch, rnd_state_batch , values_quant_batch
+
+                    first_traj = last_traj
