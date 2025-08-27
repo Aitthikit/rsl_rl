@@ -13,6 +13,8 @@ from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import string_to_callable
 from rsl_rl.utils.quantile_distribution import QuantileDistribution
 
+import matplotlib.pyplot as plt
+
 import torch.optim as optim
 
 class DPPO:
@@ -116,6 +118,7 @@ class DPPO:
         self.huber_delta = huber_delta
         self.quantile_loss_coef = quantile_loss_coef
 
+
     def init_storage(
         self, training_type, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, actions_shape, distributional_loss_type=None ,quantile_count=200
     ):
@@ -151,6 +154,9 @@ class DPPO:
         # Record observations
         self.transition.observations = obs
         self.transition.privileged_observations = critic_obs
+
+        # print(f"values quant shape: {self.transition.values_quant[0][0:10]}||||||||||{self.transition.values_quant[0][100:110]}|||||||{self.transition.values_quant[0][180:190]}")
+
         return self.transition.actions
 
     def process_env_step(self, rewards, dones, infos):
@@ -166,6 +172,7 @@ class DPPO:
 
         # Bootstrapping on time outs
         if "time_outs" in infos:
+            # print("Transition value", self.transition.values.shape,infos["time_outs"].to(self.device).shape)
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
             )
@@ -292,7 +299,7 @@ class DPPO:
             # Get both scalar values and quantile distributions
             value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
             quantiles_batch = self.policy.evaluate_quantiles(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
-            
+            # print(f"Quantiles batch shape: {quantiles_batch.shape}, Value batch shape: {value_batch.shape}")
             # Entropy (only for original samples)
             mu_batch = self.policy.action_mean[:original_batch_size].clone()
             sigma_batch = self.policy.action_std[:original_batch_size].clone()
@@ -356,7 +363,7 @@ class DPPO:
 
             # Total loss
             loss = (surrogate_loss + 
-                   self.value_loss_coef * value_loss + 
+                #    self.value_loss_coef * value_loss + 
                    self.quantile_loss_coef * distributional_loss - 
                    self.entropy_coef * entropy_batch.mean())
 

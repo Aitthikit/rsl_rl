@@ -179,7 +179,7 @@ class PPO:
             #     self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
             # ).shape)
             # print(self.transition.rewards.shape)
-            # print(self.transition.values.shape, infos["time_outs"].unsqueeze(1).to(self.device).shape)
+            print(self.transition.values.shape, infos["time_outs"].unsqueeze(1).to(self.device).shape)
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
             )
@@ -231,6 +231,7 @@ class PPO:
             hid_states_batch,
             masks_batch,
             rnd_state_batch,
+            _
         ) in generator:
 
             # number of augmentations per sample

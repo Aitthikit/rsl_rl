@@ -53,10 +53,11 @@ def make_distorted_measure(distorted_tau: torch.Tensor) -> Callable:
 
     def distorted_measure(quantiles):
         sorted_quantiles, _ = quantiles.sort(-1)
-        # print(f"Sorted quantiles: {sorted_quantiles.shape}")
+        # print(f"Sorted quantiles: {sorted_quantiles}")
         # sorted_quantiles = sorted_quantiles.reshape(-1, sorted_quantiles.shape[-1])
-        # print(f"Sort_quantile: {sorted_quantiles.shape}, {distortion.shape}")
+        # print(f"Sort_quantile: {sorted_quantiles.shape}")
         values = squeeze_preserve_batch((distortion.to(sorted_quantiles.device) * sorted_quantiles).sum(-1))
+        # print(f"Distorted measure values: {values.shape}")
         return values.unsqueeze(-1)
 
     return distorted_measure
@@ -166,12 +167,13 @@ class QuantileCritic(nn.Module):
             features = input
 
         features = squeeze_preserve_batch(self._layers(features))
+
         
         # Generate quantiles for each output dimension
         quantiles = torch.stack([layer(features) for layer in self._quantile_layers], dim=1)
         quantiles = squeeze_preserve_batch(quantiles)
         self._last_quantiles = quantiles
-        
+        # print(f"quantile shape: {quantiles.shape}")
         if distribution:
             return quantiles
 
