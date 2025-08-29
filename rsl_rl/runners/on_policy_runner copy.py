@@ -24,8 +24,7 @@ from rsl_rl.modules import (
     obs_encoder
 )
 from rsl_rl.utils import store_code_state
-import torch
-import torch.nn as nn
+
 
 class OnPolicyRunner:
     """On-policy runner for training and evaluation."""
@@ -55,15 +54,12 @@ class OnPolicyRunner:
         num_obs = obs.shape[1]
 
         self.obs_indices = obs[:,36:] # Specify which observation indices to encode
-        # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
         self.obs_encoder = obs_encoder.ObsEncoder(
-            input_dim=self.obs_indices.shape[1],
+            input_dim=len(self.obs_indices),
             hidden_dims=[256, 128],
             output_dim=8
         ).to(device)
         self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
-
-        print(f"MLP Encoder Structure: {self.obs_encoder}")
 
         # resolve type of privileged observations
         if self.training_type == "rl":
@@ -235,17 +231,18 @@ class OnPolicyRunner:
                 for _ in range(self.num_steps_per_env):
                     # Implement conventional Network & GRU for adaptation module here
                     #######################################
-                     # Encode selected observation indices
-                    selected_obs = obs[:,36:]
+                    # Encode selected observation indices
+                    selected_obs = obs[:, self.obs_indices]
                     encoded_obs = self.obs_encoder(selected_obs)
-                    # print(f"Encoded observation shape: {encoded_obs}")
+                    
                     # Combine encoded observations with original obs
                     # Replace the selected indices with encoded values
                     modified_obs = obs.clone()
-                    modified_obs = modified_obs[:,:36]
-                    modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
-
-                    # print(f"Modified observation shape: {modified_obs.shape}")
+                    modified_obs[:, self.obs_indices] = encoded_obs[:, :len(self.obs_indices)]
+                    # If there are additional encoded features, append them
+                    if encoded_obs.shape[1] > len(self.obs_indices):
+                        modified_obs = torch.cat([modified_obs, encoded_obs[:, len(self.obs_indices):]], dim=1)
+                    
                     #######################################
                     # Sample actions
                     actions = self.alg.act(obs, privileged_obs)
@@ -310,27 +307,6 @@ class OnPolicyRunner:
             # update policy
             loss_dict = self.alg.update()
             print(f"Losses: {loss_dict}")
-
-            # Update encoder using the PPO losses
-            self.encoder_optimizer.zero_grad()
-            
-            # Combine relevant losses for encoder update
-            encoder_loss = torch.tensor(0.0, device=self.device)
-
-            if 'value_function' in loss_dict:
-                encoder_loss = encoder_loss + loss_dict['value_function']
-            if 'surrogate' in loss_dict:
-                encoder_loss = encoder_loss + loss_dict['surrogate']
-            if 'entropy' in loss_dict:
-                encoder_loss = encoder_loss - self.alg.entropy_coef * loss_dict['entropy']
-            if 'distributional' in loss_dict:
-                encoder_loss = encoder_loss + loss_dict['distributional']
-
-            if encoder_loss.requires_grad:
-                encoder_loss.backward(retain_graph=True)
-                torch.nn.utils.clip_grad_norm_(self.obs_encoder.parameters(), self.alg.max_grad_norm)
-                self.encoder_optimizer.step()
-
 
             stop = time.time()
             learn_time = stop - start
@@ -475,8 +451,6 @@ class OnPolicyRunner:
         saved_dict = {
             "model_state_dict": self.alg.policy.state_dict(),
             "optimizer_state_dict": self.alg.optimizer.state_dict(),
-            "encoder_state_dict": self.obs_encoder.state_dict(),
-            "encoder_optimizer_state_dict": self.encoder_optimizer.state_dict(),
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
@@ -500,8 +474,6 @@ class OnPolicyRunner:
         loaded_dict = torch.load(path, weights_only=False, map_location=map_location)
         # -- Load model
         resumed_training = self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
-
-        # self.obs_encoder.load_state_dict(loaded_dict["encoder_state_dict"])
         # -- Load RND model if used
         if self.alg.rnd:
             self.alg.rnd.load_state_dict(loaded_dict["rnd_state_dict"])

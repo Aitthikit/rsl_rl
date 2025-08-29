@@ -410,6 +410,8 @@ class DPPO:
             
             # else:
             # torch.autograd.set_detect_anomaly(True)
+            # print("Loss:", loss)
+
             loss.backward()
 
             # Collect gradients from all GPUs
