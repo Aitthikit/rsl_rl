@@ -39,7 +39,7 @@ class OnPolicyRunner:
 
         # check if multi-gpu is enabled
         self._configure_multi_gpu()
-
+        self.encoder_obs = False
         # resolve training type depending on the algorithm
         if self.alg_cfg["class_name"] == "PPO":
             self.training_type = "rl"
@@ -47,6 +47,7 @@ class OnPolicyRunner:
             self.training_type = "distillation"
         elif self.alg_cfg["class_name"] == "DPPO":
             self.training_type = "dppo"
+            self.encoder_obs = self.policy_cfg.get("encoder_obs", False)
         else:
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
 
@@ -54,16 +55,20 @@ class OnPolicyRunner:
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
 
-        self.obs_indices = obs[:,36:] # Specify which observation indices to encode
-        # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
-        self.obs_encoder = obs_encoder.ObsEncoder(
-            input_dim=self.obs_indices.shape[1],
-            hidden_dims=[256, 128],
-            output_dim=8
-        ).to(device)
-        self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
+        if self.encoder_obs:
+            self.encoder_cfg = train_cfg["encoder"]
+            self.obs_indices = obs[:,36:] # Specify which observation indices to encode
+            # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
+            self.obs_encoder = obs_encoder.ObsEncoder(
+                input_dim=self.obs_indices.shape[1],
+                hidden_dims=self.encoder_cfg.get("hidden_dims", [256, 128]),
+                output_dim=self.encoder_cfg.get("output_dim", 8),
+            ).to(device)
+            self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
 
-        print(f"MLP Encoder Structure: {self.obs_encoder}")
+            print(f"MLP Encoder Structure: {self.obs_encoder}")
+
+            num_obs = 36 + self.encoder_cfg.get("output_dim", 8)  # Update num_obs after encoding
 
         # resolve type of privileged observations
         if self.training_type == "rl":
@@ -202,6 +207,18 @@ class OnPolicyRunner:
         obs, extras = self.env.get_observations()
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
+        if self.encoder_obs:
+            selected_obs = obs[:,36:]
+            encoded_obs = self.obs_encoder(selected_obs)
+            modified_obs = obs.clone()
+            modified_obs = modified_obs[:,:36]
+            modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
+
+            selected_obs = privileged_obs[:,36:]
+            encoded_obs = self.obs_encoder(selected_obs)
+            modified_privileged_obs = privileged_obs.clone()
+            modified_privileged_obs = modified_privileged_obs[:,:36]
+            modified_privileged_obs = torch.cat([modified_privileged_obs, encoded_obs], dim=1)
         self.train_mode()  # switch to train mode (for dropout for example)
 
         # Book keeping
@@ -236,25 +253,23 @@ class OnPolicyRunner:
                     # Implement conventional Network & GRU for adaptation module here
                     #######################################
                      # Encode selected observation indices
-                    selected_obs = obs[:,36:]
-                    encoded_obs = self.obs_encoder(selected_obs)
-                    # print(f"Encoded observation shape: {encoded_obs}")
-                    # Combine encoded observations with original obs
-                    # Replace the selected indices with encoded values
-                    modified_obs = obs.clone()
-                    modified_obs = modified_obs[:,:36]
-                    modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
 
                     # print(f"Modified observation shape: {modified_obs.shape}")
                     #######################################
                     # Sample actions
-                    actions = self.alg.act(obs, privileged_obs)
+                    # print(modified_obs[0,:])
+
+                    if self.encoder_obs:
+                        actions = self.alg.act(modified_obs, modified_privileged_obs)
+                    else:
+                        actions = self.alg.act(obs, privileged_obs)
                     # Step the environment
                     obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
                     # Move to device
                     obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
                     # perform normalization
                     obs = self.obs_normalizer(obs)
+
                     if self.privileged_obs_type is not None:
                         privileged_obs = self.privileged_obs_normalizer(
                             infos["observations"][self.privileged_obs_type].to(self.device)
@@ -262,6 +277,19 @@ class OnPolicyRunner:
                     else:
                         privileged_obs = obs
 
+                    if self.encoder_obs:
+                        selected_obs = obs[:,36:]
+                        encoded_obs = self.obs_encoder(selected_obs)
+                        modified_obs = obs.clone()
+                        modified_obs = modified_obs[:,:36]
+                        modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
+
+                        selected_obs = privileged_obs[:,36:]
+                        encoded_obs = self.obs_encoder(selected_obs)
+                        modified_privileged_obs = privileged_obs.clone()
+                        modified_privileged_obs = modified_privileged_obs[:,:36]
+                        modified_privileged_obs = torch.cat([modified_privileged_obs, encoded_obs], dim=1)
+                    
                     # process the step
                     self.alg.process_env_step(rewards, dones, infos)
 
@@ -305,7 +333,10 @@ class OnPolicyRunner:
                 if self.training_type == "rl":
                     self.alg.compute_returns(privileged_obs)
                 if self.training_type == "dppo":
-                    self.alg.compute_returns(privileged_obs)
+                    if self.encoder_obs:
+                        self.alg.compute_returns(modified_privileged_obs)
+                    else:
+                        self.alg.compute_returns(privileged_obs)
 
             # update policy
             loss_dict = self.alg.update()
