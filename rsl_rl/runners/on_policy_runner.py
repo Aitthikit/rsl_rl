@@ -43,6 +43,7 @@ class OnPolicyRunner:
         # resolve training type depending on the algorithm
         if self.alg_cfg["class_name"] == "PPO":
             self.training_type = "rl"
+            self.encoder_obs = self.policy_cfg.get("encoder_obs", False)
         elif self.alg_cfg["class_name"] == "Distillation":
             self.training_type = "distillation"
         elif self.alg_cfg["class_name"] == "DPPO":
@@ -58,6 +59,7 @@ class OnPolicyRunner:
         if self.encoder_obs:
             self.encoder_cfg = train_cfg["encoder"]
             self.obs_indices = obs[:,36:] # Specify which observation indices to encode
+            # print(f"Original observation shape: {self.obs_indices.shape}")
             # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
             self.obs_encoder = obs_encoder.ObsEncoder(
                 input_dim=self.obs_indices.shape[1],
@@ -280,6 +282,7 @@ class OnPolicyRunner:
                     if self.encoder_obs:
                         selected_obs = obs[:,36:]
                         encoded_obs = self.obs_encoder(selected_obs)
+                        print("encoded_obs:", encoded_obs[0,:])
                         modified_obs = obs.clone()
                         modified_obs = modified_obs[:,:36]
                         modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
@@ -331,7 +334,10 @@ class OnPolicyRunner:
 
                 # compute returns
                 if self.training_type == "rl":
-                    self.alg.compute_returns(privileged_obs)
+                    if self.encoder_obs:
+                        self.alg.compute_returns(modified_privileged_obs)
+                    else:
+                        self.alg.compute_returns(privileged_obs)
                 if self.training_type == "dppo":
                     if self.encoder_obs:
                         self.alg.compute_returns(modified_privileged_obs)
@@ -342,25 +348,25 @@ class OnPolicyRunner:
             loss_dict = self.alg.update()
             print(f"Losses: {loss_dict}")
 
-            # Update encoder using the PPO losses
-            self.encoder_optimizer.zero_grad()
-            
-            # Combine relevant losses for encoder update
-            encoder_loss = torch.tensor(0.0, device=self.device)
+            if self.encoder_obs:
+                # Update encoder using the PPO losses
+                self.encoder_optimizer.zero_grad()
+                # Combine relevant losses for encoder update
+                encoder_loss = torch.tensor(0.0, device=self.device)
 
-            if 'value_function' in loss_dict:
-                encoder_loss = encoder_loss + loss_dict['value_function']
-            if 'surrogate' in loss_dict:
-                encoder_loss = encoder_loss + loss_dict['surrogate']
-            if 'entropy' in loss_dict:
-                encoder_loss = encoder_loss - self.alg.entropy_coef * loss_dict['entropy']
-            if 'distributional' in loss_dict:
-                encoder_loss = encoder_loss + loss_dict['distributional']
+                if 'value_function' in loss_dict:
+                    encoder_loss = encoder_loss + loss_dict['value_function']
+                if 'surrogate' in loss_dict:
+                    encoder_loss = encoder_loss + loss_dict['surrogate']
+                if 'entropy' in loss_dict:
+                    encoder_loss = encoder_loss - self.alg.entropy_coef * loss_dict['entropy']
+                if 'distributional' in loss_dict:
+                    encoder_loss = encoder_loss + loss_dict['distributional']
 
-            if encoder_loss.requires_grad:
-                encoder_loss.backward(retain_graph=True)
-                torch.nn.utils.clip_grad_norm_(self.obs_encoder.parameters(), self.alg.max_grad_norm)
-                self.encoder_optimizer.step()
+                if encoder_loss.requires_grad:
+                    encoder_loss.backward(retain_graph=True)
+                    torch.nn.utils.clip_grad_norm_(self.obs_encoder.parameters(), self.alg.max_grad_norm)
+                    self.encoder_optimizer.step()
 
 
             stop = time.time()
@@ -503,14 +509,22 @@ class OnPolicyRunner:
 
     def save(self, path: str, infos=None):
         # -- Save model
-        saved_dict = {
-            "model_state_dict": self.alg.policy.state_dict(),
-            "optimizer_state_dict": self.alg.optimizer.state_dict(),
-            "encoder_state_dict": self.obs_encoder.state_dict(),
-            "encoder_optimizer_state_dict": self.encoder_optimizer.state_dict(),
-            "iter": self.current_learning_iteration,
-            "infos": infos,
-        }
+        if self.encoder_obs:
+            saved_dict = {
+                "model_state_dict": self.alg.policy.state_dict(),
+                "optimizer_state_dict": self.alg.optimizer.state_dict(),
+                "encoder_state_dict": self.obs_encoder.state_dict(),
+                "encoder_optimizer_state_dict": self.encoder_optimizer.state_dict(),
+                "iter": self.current_learning_iteration,
+                "infos": infos,
+            }
+        else:
+            saved_dict = {
+                "model_state_dict": self.alg.policy.state_dict(),
+                "optimizer_state_dict": self.alg.optimizer.state_dict(),
+                "iter": self.current_learning_iteration,
+                "infos": infos,
+            }
         # -- Save RND model if used
         if self.alg.rnd:
             saved_dict["rnd_state_dict"] = self.alg.rnd.state_dict()
