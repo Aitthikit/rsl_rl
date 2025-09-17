@@ -44,11 +44,13 @@ class OnPolicyRunner:
         if self.alg_cfg["class_name"] == "PPO":
             self.training_type = "rl"
             self.encoder_obs = self.policy_cfg.get("encoder_obs", False)
+            self.navigate = self.policy_cfg.get("navigates", False)
         elif self.alg_cfg["class_name"] == "Distillation":
             self.training_type = "distillation"
         elif self.alg_cfg["class_name"] == "DPPO":
             self.training_type = "dppo"
             self.encoder_obs = self.policy_cfg.get("encoder_obs", False)
+            self.navigate = self.policy_cfg.get("navigates", False)
         else:
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
 
@@ -57,20 +59,44 @@ class OnPolicyRunner:
         num_obs = obs.shape[1]
 
         if self.encoder_obs:
-            self.encoder_cfg = train_cfg["encoder"]
-            self.obs_indices = obs[:,36:] # Specify which observation indices to encode
-            # print(f"Original observation shape: {self.obs_indices.shape}")
-            # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
-            self.obs_encoder = obs_encoder.ObsEncoder(
-                input_dim=self.obs_indices.shape[1],
-                hidden_dims=self.encoder_cfg.get("hidden_dims", [256, 128]),
-                output_dim=self.encoder_cfg.get("output_dim", 8),
-            ).to(device)
-            self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
+            if self.navigate:
+                self.encoder_cfg = train_cfg["encoder"]
+                self.obs_indices = obs[:,self.encoder_cfg.get("obs_indices", 36):] # Specify which observation indices to encode
+                # self.obs_indices = obs[:,36:] # Specify which observation indices to encode
+                # print(f"Original observation shape: {self.obs_indices.shape}")
+                # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
+                self.obs_encoder = obs_encoder.ObsEncoder(
+                    input_dim=self.obs_indices.shape[1],
+                    hidden_dims=self.encoder_cfg.get("hidden_dims", [256, 128]),
+                    output_dim=self.encoder_cfg.get("output_dim", 8),
+                ).to(device)
+                self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
+                self.obs_encoder.load_state_dict(torch.load(self.env.cfg.encoderbase_model)["encoder_state_dict"])
+                # self.obs_encoder = torch.jit.load(self.env.cfg.encoder_model).to(self.device)
+                print(f"MLP Encoder Structure: {self.obs_encoder}")
 
-            print(f"MLP Encoder Structure: {self.obs_encoder}")
+                num_obs = self.encoder_cfg.get("obs_indices", 36) + self.encoder_cfg.get("output_dim", 8)  # Update num_obs after encoding
+                # self.obs_encoder.load_state_dict(torch.load(self.env.cfg.encoder_model)["encoder_state_dict"])
+                # self.obs_encoder.eval()
+                # dummy_obs = torch.zeros(1, obs_indices.shape[1], device=agent_cfg.device)
+                # traced_encoder = torch.jit.trace(obs_encoder, dummy_obs)
+                # traced_encoder.save(os.path.join(export_model_dir, "encoder.pt"))
+            else:
+                self.encoder_cfg = train_cfg["encoder"]
+                self.obs_indices = obs[:,self.encoder_cfg.get("obs_indices", 36):]
+                # self.obs_indices = obs[:,36:] # Specify which observation indices to encode
+                # print(f"Original observation shape: {self.obs_indices.shape}")
+                # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
+                self.obs_encoder = obs_encoder.ObsEncoder(
+                    input_dim=self.obs_indices.shape[1],
+                    hidden_dims=self.encoder_cfg.get("hidden_dims", [256, 128]),
+                    output_dim=self.encoder_cfg.get("output_dim", 8),
+                ).to(device)
+                self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
 
-            num_obs = 36 + self.encoder_cfg.get("output_dim", 8)  # Update num_obs after encoding
+                print(f"MLP Encoder Structure: {self.obs_encoder}")
+
+                num_obs = self.encoder_cfg.get("obs_indices", 36) + self.encoder_cfg.get("output_dim", 8)  # Update num_obs after encoding
 
         # resolve type of privileged observations
         if self.training_type == "rl":
@@ -210,17 +236,17 @@ class OnPolicyRunner:
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
         if self.encoder_obs:
-            selected_obs = obs[:,36:]
-            encoded_obs = self.obs_encoder(selected_obs)
-            modified_obs = obs.clone()
-            modified_obs = modified_obs[:,:36]
-            modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
+                selected_obs = obs[:,self.encoder_cfg.get("obs_indices", 36):]
+                encoded_obs = self.obs_encoder(selected_obs)
+                modified_obs = obs.clone()
+                modified_obs = modified_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
+                modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
 
-            selected_obs = privileged_obs[:,36:]
-            encoded_obs = self.obs_encoder(selected_obs)
-            modified_privileged_obs = privileged_obs.clone()
-            modified_privileged_obs = modified_privileged_obs[:,:36]
-            modified_privileged_obs = torch.cat([modified_privileged_obs, encoded_obs], dim=1)
+                selected_obs = privileged_obs[:,self.encoder_cfg.get("obs_indices", 36):]
+                encoded_obs = self.obs_encoder(selected_obs)
+                modified_privileged_obs = privileged_obs.clone()
+                modified_privileged_obs = modified_privileged_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
+                modified_privileged_obs = torch.cat([modified_privileged_obs, encoded_obs], dim=1)
         self.train_mode()  # switch to train mode (for dropout for example)
 
         # Book keeping
@@ -280,17 +306,17 @@ class OnPolicyRunner:
                         privileged_obs = obs
 
                     if self.encoder_obs:
-                        selected_obs = obs[:,36:]
+                        selected_obs = obs[:,self.encoder_cfg.get("obs_indices", 36):]
                         encoded_obs = self.obs_encoder(selected_obs)
-                        print("encoded_obs:", encoded_obs[0,:])
+                        # print("encoded_obs:", encoded_obs[0,:])
                         modified_obs = obs.clone()
-                        modified_obs = modified_obs[:,:36]
+                        modified_obs = modified_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
                         modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
 
-                        selected_obs = privileged_obs[:,36:]
+                        selected_obs = privileged_obs[:,self.encoder_cfg.get("obs_indices", 36):]
                         encoded_obs = self.obs_encoder(selected_obs)
                         modified_privileged_obs = privileged_obs.clone()
-                        modified_privileged_obs = modified_privileged_obs[:,:36]
+                        modified_privileged_obs = modified_privileged_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
                         modified_privileged_obs = torch.cat([modified_privileged_obs, encoded_obs], dim=1)
                     
                     # process the step
