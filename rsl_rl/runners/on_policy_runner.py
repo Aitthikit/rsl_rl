@@ -59,44 +59,62 @@ class OnPolicyRunner:
         num_obs = obs.shape[1]
 
         if self.encoder_obs:
-            if self.navigate:
-                self.encoder_cfg = train_cfg["encoder"]
-                self.obs_indices = obs[:,self.encoder_cfg.get("obs_indices", 36):] # Specify which observation indices to encode
-                # self.obs_indices = obs[:,36:] # Specify which observation indices to encode
-                # print(f"Original observation shape: {self.obs_indices.shape}")
-                # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
-                self.obs_encoder = obs_encoder.ObsEncoder(
-                    input_dim=self.obs_indices.shape[1],
-                    hidden_dims=self.encoder_cfg.get("hidden_dims", [256, 128]),
-                    output_dim=self.encoder_cfg.get("output_dim", 8),
-                ).to(device)
-                self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
-                self.obs_encoder.load_state_dict(torch.load(self.env.cfg.encoderbase_model)["encoder_state_dict"])
-                # self.obs_encoder = torch.jit.load(self.env.cfg.encoder_model).to(self.device)
+            self.encoder_cfg = train_cfg["encoder"]
+            self.obs_indices = obs[:,self.encoder_cfg.get("obs_indices", 36):]
+            
+            # Get encoder configuration
+            encoder_type = self.encoder_cfg.get("type", "mlp")  # Default to MLP if not specified
+            input_dim = self.obs_indices.shape[1]
+            output_dim = self.encoder_cfg.get("output_dim", 8)
+            
+            # Initialize encoder based on type
+            # Initialize encoder based on type
+            encoder_params = {
+                "input_dim": input_dim,
+                "output_dim": output_dim,
+                "hidden_dims": self.encoder_cfg.get("hidden_dims", [256, 128])
+            }
+            
+            if encoder_type == "mlp":
+                self.obs_encoder = obs_encoder.ObsEncoder(**encoder_params).to(device)
                 print(f"MLP Encoder Structure: {self.obs_encoder}")
-
-                num_obs = self.encoder_cfg.get("obs_indices", 36) + self.encoder_cfg.get("output_dim", 8)  # Update num_obs after encoding
-                # self.obs_encoder.load_state_dict(torch.load(self.env.cfg.encoder_model)["encoder_state_dict"])
-                # self.obs_encoder.eval()
-                # dummy_obs = torch.zeros(1, obs_indices.shape[1], device=agent_cfg.device)
-                # traced_encoder = torch.jit.trace(obs_encoder, dummy_obs)
-                # traced_encoder.save(os.path.join(export_model_dir, "encoder.pt"))
+            
+            elif encoder_type == "gru":
+                # Add GRU specific parameters
+                encoder_params.update({
+                    "gru_hidden_size": self.encoder_cfg.get("gru_hidden_size", 256),
+                    "gru_num_layers": self.encoder_cfg.get("gru_num_layers", 2)
+                })
+                self.obs_encoder = obs_encoder.GRUEncoder(**encoder_params).to(device)
+                print(f"GRU Encoder Structure: {self.obs_encoder}")
+            
+            elif encoder_type == "conv":
+                # Add Conv specific parameters
+                encoder_params.update({
+                    "conv_channels": self.encoder_cfg.get("conv_channels", [32, 64, 128]),
+                    "conv_kernel_sizes": self.encoder_cfg.get("conv_kernel_sizes", [3, 3, 3]),
+                    "conv_strides": self.encoder_cfg.get("conv_strides", [1, 1, 1])
+                })
+                self.obs_encoder = obs_encoder.ConvEncoder(**encoder_params).to(device)
+                print(f"Conv Encoder Structure: {self.obs_encoder}")
             else:
-                self.encoder_cfg = train_cfg["encoder"]
-                self.obs_indices = obs[:,self.encoder_cfg.get("obs_indices", 36):]
-                # self.obs_indices = obs[:,36:] # Specify which observation indices to encode
-                # print(f"Original observation shape: {self.obs_indices.shape}")
-                # print(f"Observation indices to encode: {self.obs_indices.shape[1]}")
-                self.obs_encoder = obs_encoder.ObsEncoder(
-                    input_dim=self.obs_indices.shape[1],
-                    hidden_dims=self.encoder_cfg.get("hidden_dims", [256, 128]),
-                    output_dim=self.encoder_cfg.get("output_dim", 8),
-                ).to(device)
-                self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=3e-4)
+                raise ValueError(f"Unsupported encoder type: {encoder_type}")
 
-                print(f"MLP Encoder Structure: {self.obs_encoder}")
+            # Initialize optimizer
+            self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=self.encoder_cfg.get("learning_rate", 3e-4))
+            
+            # Load pre-trained model if in navigate mode and model path exists
+            if self.navigate and hasattr(self.env, 'cfg') and hasattr(self.env.cfg, 'encoderbase_model'):
+                model_state = torch.load(self.env.cfg.encoderbase_model)
+                if "encoder_state_dict" in model_state:
+                    self.obs_encoder.load_state_dict(model_state["encoder_state_dict"])
 
-                num_obs = self.encoder_cfg.get("obs_indices", 36) + self.encoder_cfg.get("output_dim", 8)  # Update num_obs after encoding
+            # Update observation dimension
+            num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
+
+        # print(f"MLP Encoder Structure: {self.obs_encoder}")
+
+        # num_obs = self.encoder_cfg.get("obs_indices", 36) + self.encoder_cfg.get("output_dim", 8)  # Update num_obs after encoding
 
         # resolve type of privileged observations
         if self.training_type == "rl":
