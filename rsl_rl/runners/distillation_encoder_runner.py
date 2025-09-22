@@ -20,7 +20,8 @@ from rsl_rl.modules import (
     EmpiricalNormalization,
     StudentTeacher,
     StudentTeacherRecurrent,
-    Quantile_NN
+    Quantile_NN,
+    obs_encoder
 )
 from rsl_rl.utils import store_code_state
 import torch
@@ -59,13 +60,55 @@ class OnPolicyRunner:
 
         if self.encoder_obs:
             self.encoder_cfg = train_cfg["encoder"]
-            input_dim = obs[:,self.encoder_cfg.get("obs_indices", 36):].shape[1]
+            self.obs_indices = obs[:,self.encoder_cfg.get("obs_indices", 36):]
+            
+            # Get encoder configuration
+            encoder_type = self.encoder_cfg.get("type", "mlp")  # Default to MLP if not specified
+            input_dim = self.obs_indices.shape[1]
             output_dim = self.encoder_cfg.get("output_dim", 8)
             
-            # Initialize the encoder in DPPO if that's the algorithm being used
-            if self.training_type == "dppo":
-                self.alg.initialize_encoder(self.encoder_cfg, input_dim)
-                
+            # Initialize encoder based on type
+            # Initialize encoder based on type
+            encoder_params = {
+                "input_dim": input_dim,
+                "output_dim": output_dim,
+                "hidden_dims": self.encoder_cfg.get("hidden_dims", [256, 128])
+            }
+            
+            if encoder_type == "mlp":
+                self.obs_encoder = obs_encoder.ObsEncoder(**encoder_params).to(device)
+                print(f"MLP Encoder Structure: {self.obs_encoder}")
+            
+            elif encoder_type == "gru":
+                # Add GRU specific parameters
+                encoder_params.update({
+                    "gru_hidden_size": self.encoder_cfg.get("gru_hidden_size", 256),
+                    "gru_num_layers": self.encoder_cfg.get("gru_num_layers", 2)
+                })
+                self.obs_encoder = obs_encoder.GRUEncoder(**encoder_params).to(device)
+                print(f"GRU Encoder Structure: {self.obs_encoder}")
+            
+            elif encoder_type == "conv":
+                # Add Conv specific parameters
+                encoder_params.update({
+                    "conv_channels": self.encoder_cfg.get("conv_channels", [32, 64, 128]),
+                    "conv_kernel_sizes": self.encoder_cfg.get("conv_kernel_sizes", [3, 3, 3]),
+                    "conv_strides": self.encoder_cfg.get("conv_strides", [1, 1, 1])
+                })
+                self.obs_encoder = obs_encoder.ConvEncoder(**encoder_params).to(device)
+                print(f"Conv Encoder Structure: {self.obs_encoder}")
+            else:
+                raise ValueError(f"Unsupported encoder type: {encoder_type}")
+
+            # Initialize optimizer
+            self.encoder_optimizer = torch.optim.Adam(self.obs_encoder.parameters(), lr=self.encoder_cfg.get("learning_rate", 3e-4))
+            
+            # Load pre-trained model if in navigate mode and model path exists
+            if self.navigate and hasattr(self.env, 'cfg') and hasattr(self.env.cfg, 'encoderbase_model'):
+                model_state = torch.load(self.env.cfg.encoderbase_model)
+                if "encoder_state_dict" in model_state:
+                    self.obs_encoder.load_state_dict(model_state["encoder_state_dict"])
+
             # Update observation dimension
             num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
 
@@ -210,12 +253,18 @@ class OnPolicyRunner:
         obs, extras = self.env.get_observations()
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
-        if self.encoder_obs and self.training_type == "dppo":
-                modified_obs = self.alg.encode_obs(obs)
-                modified_privileged_obs = self.alg.encode_obs(privileged_obs)
-        else:
-                modified_obs = obs
-                modified_privileged_obs = privileged_obs
+        if self.encoder_obs:
+                selected_obs = obs[:,self.encoder_cfg.get("obs_indices", 36):]
+                encoded_obs = self.obs_encoder(selected_obs)
+                modified_obs = obs.clone()
+                modified_obs = modified_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
+                modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
+
+                selected_obs = privileged_obs[:,self.encoder_cfg.get("obs_indices", 36):]
+                encoded_obs = self.obs_encoder(selected_obs)
+                modified_privileged_obs = privileged_obs.clone()
+                modified_privileged_obs = modified_privileged_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
+                modified_privileged_obs = torch.cat([modified_privileged_obs, encoded_obs], dim=1)
         self.train_mode()  # switch to train mode (for dropout for example)
 
         # Book keeping
@@ -274,12 +323,19 @@ class OnPolicyRunner:
                     else:
                         privileged_obs = obs
 
-                    if self.encoder_obs and self.training_type == "dppo":
-                        modified_obs = self.alg.encode_obs(obs)
-                        modified_privileged_obs = self.alg.encode_obs(privileged_obs)
-                    else:
-                        modified_obs = obs
-                        modified_privileged_obs = privileged_obs
+                    if self.encoder_obs:
+                        selected_obs = obs[:,self.encoder_cfg.get("obs_indices", 36):]
+                        encoded_obs = self.obs_encoder(selected_obs)
+                        # print("encoded_obs:", encoded_obs[0,:])
+                        modified_obs = obs.clone()
+                        modified_obs = modified_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
+                        modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
+
+                        selected_obs = privileged_obs[:,self.encoder_cfg.get("obs_indices", 36):]
+                        encoded_obs = self.obs_encoder(selected_obs)
+                        modified_privileged_obs = privileged_obs.clone()
+                        modified_privileged_obs = modified_privileged_obs[:,:self.encoder_cfg.get("obs_indices", 36)]
+                        modified_privileged_obs = torch.cat([modified_privileged_obs, encoded_obs], dim=1)
                     
                     # process the step
                     self.alg.process_env_step(rewards, dones, infos)
@@ -336,7 +392,25 @@ class OnPolicyRunner:
             loss_dict = self.alg.update()
             print(f"Losses: {loss_dict}")
 
-            # Encoder updates are now handled by the DPPO algorithm directly
+            if self.encoder_obs:
+                # Update encoder using the PPO losses
+                self.encoder_optimizer.zero_grad()
+                # Combine relevant losses for encoder update
+                encoder_loss = torch.tensor(0.0, device=self.device)
+
+                if 'value_function' in loss_dict:
+                    encoder_loss = encoder_loss + loss_dict['value_function']
+                if 'surrogate' in loss_dict:
+                    encoder_loss = encoder_loss + loss_dict['surrogate']
+                if 'entropy' in loss_dict:
+                    encoder_loss = encoder_loss - self.alg.entropy_coef * loss_dict['entropy']
+                if 'distributional' in loss_dict:
+                    encoder_loss = encoder_loss + loss_dict['distributional']
+
+                if encoder_loss.requires_grad:
+                    encoder_loss.backward(retain_graph=True)
+                    torch.nn.utils.clip_grad_norm_(self.obs_encoder.parameters(), self.alg.max_grad_norm)
+                    self.encoder_optimizer.step()
 
 
             stop = time.time()
@@ -479,16 +553,22 @@ class OnPolicyRunner:
 
     def save(self, path: str, infos=None):
         # -- Save model
-        saved_dict = {
-            "model_state_dict": self.alg.policy.state_dict(),
-            "optimizer_state_dict": self.alg.optimizer.state_dict(),
-            "iter": self.current_learning_iteration,
-            "infos": infos,
-        }
-        
-        # Let the algorithm save its additional states (like encoder state for DPPO)
-        if hasattr(self.alg, 'save'):
-            saved_dict.update(self.alg.save(path, infos))
+        if self.encoder_obs:
+            saved_dict = {
+                "model_state_dict": self.alg.policy.state_dict(),
+                "optimizer_state_dict": self.alg.optimizer.state_dict(),
+                "encoder_state_dict": self.obs_encoder.state_dict(),
+                "encoder_optimizer_state_dict": self.encoder_optimizer.state_dict(),
+                "iter": self.current_learning_iteration,
+                "infos": infos,
+            }
+        else:
+            saved_dict = {
+                "model_state_dict": self.alg.policy.state_dict(),
+                "optimizer_state_dict": self.alg.optimizer.state_dict(),
+                "iter": self.current_learning_iteration,
+                "infos": infos,
+            }
         # -- Save RND model if used
         if self.alg.rnd:
             saved_dict["rnd_state_dict"] = self.alg.rnd.state_dict()
@@ -510,22 +590,10 @@ class OnPolicyRunner:
         # -- Load model
         resumed_training = self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
 
-        # Let the algorithm load its additional states (like encoder state for DPPO)
-        if hasattr(self.alg, 'load'):
-            self.alg.load(loaded_dict)
-
-        if self.training_type == "distillation":
-            print(
-                "Warning: Encoder parameters not loaded. If you are loading a model for distillation after RL training, "
-                "this is expected. Otherwise, if you are resuming RL training, please make sure that the encoder "
-                "configuration is the same as the one used for training."
-            )
-            self.alg.load_teacher_encoder()
-
+        # self.obs_encoder.load_state_dict(loaded_dict["encoder_state_dict"])
         # -- Load RND model if used
         if self.alg.rnd:
             self.alg.rnd.load_state_dict(loaded_dict["rnd_state_dict"])
-            
         # -- Load observation normalizer if used
         if self.empirical_normalization:
             if resumed_training:
@@ -538,7 +606,6 @@ class OnPolicyRunner:
                 # an rl training. Thus the actor normalizer is loaded for the teacher model. The student's normalizer
                 # is not loaded, as the observation space could differ from the previous rl training.
                 self.privileged_obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
-                
         # -- load optimizer if used
         if load_optimizer and resumed_training:
             # -- algorithm optimizer
@@ -546,11 +613,9 @@ class OnPolicyRunner:
             # -- RND optimizer if used
             if self.alg.rnd:
                 self.alg.rnd_optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
-                
         # -- load current learning iteration
         if resumed_training:
             self.current_learning_iteration = loaded_dict["iter"]
-            
         return loaded_dict["infos"]
 
     def get_inference_policy(self, device=None):

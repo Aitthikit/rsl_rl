@@ -10,6 +10,7 @@ import torch.optim as optim
 
 # rsl-rl
 from rsl_rl.modules import StudentTeacher, StudentTeacherRecurrent
+from rsl_rl.modules import obs_encoder
 from rsl_rl.storage import RolloutStorage
 
 
@@ -51,6 +52,13 @@ class Distillation:
         self.optimizer = optim.Adam(self.policy.parameters(), lr=learning_rate)
         self.transition = RolloutStorage.Transition()
         self.last_hidden_states = None
+        
+        # Encoder components
+        self.encoder_obs = False
+        self.student_encoder = None
+        self.teacher_encoder = None
+        self.student_encoder_optimizer = None
+        self.teacher_encoder_optimizer = None
 
         # distillation parameters
         self.num_learning_epochs = num_learning_epochs
@@ -115,8 +123,26 @@ class Distillation:
                 # inference the student for gradient computation
                 actions = self.policy.act_inference(obs)
 
-                # behavior cloning loss
-                behavior_loss = self.loss_fn(actions, privileged_actions)
+                # Encode observations if encoder is enabled
+                if self.encoder_obs:
+                    encoded_obs = self.encode_obs(obs, is_teacher=False)
+                    actions = self.policy.act_inference(encoded_obs)
+                    
+                    # Get teacher encoded observations (using frozen encoder)
+                    encoded_privileged_obs = self.encode_obs(obs, is_teacher=True)
+                    
+                    # Update student encoder only
+                    self.student_encoder_optimizer.zero_grad()
+                    behavior_loss = self.loss_fn(actions, privileged_actions)
+                    student_loss = behavior_loss.clone()
+                    if student_loss.requires_grad:
+                        student_loss.backward()
+                        if self.max_grad_norm:
+                            torch.nn.utils.clip_grad_norm_(self.student_encoder.parameters(), self.max_grad_norm)
+                        self.student_encoder_optimizer.step()
+                else:
+                    # Regular behavior cloning loss without encoders
+                    behavior_loss = self.loss_fn(actions, privileged_actions)
 
                 # total loss
                 loss = loss + behavior_loss
@@ -148,6 +174,167 @@ class Distillation:
         loss_dict = {"behavior": mean_behavior_loss}
 
         return loss_dict
+
+    """
+    Encoder functions
+    """
+    
+    def initialize_encoders(self, encoder_cfg, student_obs_shape, teacher_obs_shape):
+        """Initialize the student and teacher observation encoders based on configuration."""
+        self.encoder_obs = True
+        self.encoder_cfg = encoder_cfg
+        
+        # Get encoder configuration
+        encoder_type = self.encoder_cfg.get("type", "mlp")  # Default to MLP if not specified
+        student_output_dim = self.encoder_cfg.get("student_output_dim", 8)
+        teacher_output_dim = self.encoder_cfg.get("teacher_output_dim", 8)
+        
+        # Student encoder parameters
+        student_params = {
+            "input_dim": student_obs_shape,
+            "output_dim": student_output_dim,
+            "hidden_dims": self.encoder_cfg.get("student_hidden_dims", [256, 128])
+        }
+        
+        # Teacher encoder parameters
+        teacher_params = {
+            "input_dim": teacher_obs_shape,
+            "output_dim": teacher_output_dim,
+            "hidden_dims": self.encoder_cfg.get("teacher_hidden_dims", [256, 128])
+        }
+        
+        # Initialize encoders based on type
+        if encoder_type == "mlp":
+            self.student_encoder = obs_encoder.ObsEncoder(**student_params).to(self.device)
+            self.teacher_encoder = obs_encoder.ObsEncoder(**teacher_params).to(self.device)
+            print(f"MLP Student Encoder Structure: {self.student_encoder}")
+            print(f"MLP Teacher Encoder Structure: {self.teacher_encoder}")
+        
+        elif encoder_type == "gru":
+            # Add GRU specific parameters
+            student_params.update({
+                "gru_hidden_size": self.encoder_cfg.get("student_gru_hidden_size", 256),
+                "gru_num_layers": self.encoder_cfg.get("student_gru_num_layers", 2)
+            })
+            teacher_params.update({
+                "gru_hidden_size": self.encoder_cfg.get("teacher_gru_hidden_size", 256),
+                "gru_num_layers": self.encoder_cfg.get("teacher_gru_num_layers", 2)
+            })
+            self.student_encoder = obs_encoder.GRUEncoder(**student_params).to(self.device)
+            self.teacher_encoder = obs_encoder.GRUEncoder(**teacher_params).to(self.device)
+            print(f"GRU Student Encoder Structure: {self.student_encoder}")
+            print(f"GRU Teacher Encoder Structure: {self.teacher_encoder}")
+        
+        elif encoder_type == "conv":
+            # Add Conv specific parameters
+            student_params.update({
+                "conv_channels": self.encoder_cfg.get("student_conv_channels", [32, 64, 128]),
+                "conv_kernel_sizes": self.encoder_cfg.get("student_conv_kernel_sizes", [3, 3, 3]),
+                "conv_strides": self.encoder_cfg.get("student_conv_strides", [1, 1, 1])
+            })
+            teacher_params.update({
+                "conv_channels": self.encoder_cfg.get("teacher_conv_channels", [32, 64, 128]),
+                "conv_kernel_sizes": self.encoder_cfg.get("teacher_conv_kernel_sizes", [3, 3, 3]),
+                "conv_strides": self.encoder_cfg.get("teacher_conv_strides", [1, 1, 1])
+            })
+            self.student_encoder = obs_encoder.ConvEncoder(**student_params).to(self.device)
+            self.teacher_encoder = obs_encoder.ConvEncoder(**teacher_params).to(self.device)
+            print(f"Conv Student Encoder Structure: {self.student_encoder}")
+            print(f"Conv Teacher Encoder Structure: {self.teacher_encoder}")
+            
+        elif encoder_type == "convgru":
+            # Add ConvGRU specific parameters
+            student_params.update({
+                "input_shape": self.encoder_cfg.get("student_input_shape", (3, 64, 64)),
+                "conv_channels": self.encoder_cfg.get("student_conv_channels", [32, 64, 128]),
+                "conv_kernel_sizes": self.encoder_cfg.get("student_conv_kernel_sizes", [3, 3, 3]),
+                "conv_strides": self.encoder_cfg.get("student_conv_strides", [2, 2, 2]),
+                "gru_hidden_size": self.encoder_cfg.get("student_gru_hidden_size", 256),
+                "gru_num_layers": self.encoder_cfg.get("student_gru_num_layers", 1)
+            })
+            teacher_params.update({
+                "input_shape": self.encoder_cfg.get("teacher_input_shape", (3, 64, 64)),
+                "conv_channels": self.encoder_cfg.get("teacher_conv_channels", [32, 64, 128]),
+                "conv_kernel_sizes": self.encoder_cfg.get("teacher_conv_kernel_sizes", [3, 3, 3]),
+                "conv_strides": self.encoder_cfg.get("teacher_conv_strides", [2, 2, 2]),
+                "gru_hidden_size": self.encoder_cfg.get("teacher_gru_hidden_size", 256),
+                "gru_num_layers": self.encoder_cfg.get("teacher_gru_num_layers", 1)
+            })
+            self.student_encoder = obs_encoder.ConvGRUEncoder(**student_params).to(self.device)
+            self.teacher_encoder = obs_encoder.ConvGRUEncoder(**teacher_params).to(self.device)
+            print(f"ConvGRU Student Encoder Structure: {self.student_encoder}")
+            print(f"ConvGRU Teacher Encoder Structure: {self.teacher_encoder}")
+        else:
+            raise ValueError(f"Unsupported encoder type: {encoder_type}")
+        
+        # Initialize optimizer for student encoder only
+        self.student_encoder_optimizer = torch.optim.Adam(
+            self.student_encoder.parameters(), 
+            lr=self.encoder_cfg.get("student_learning_rate", 3e-4)
+        )
+        
+        # Freeze teacher encoder parameters
+        for param in self.teacher_encoder.parameters():
+            param.requires_grad = False
+            
+        self.teacher_encoder.eval()  # Set teacher encoder to evaluation mode
+        self.teacher_encoder_optimizer = None  # No optimizer needed for teacher
+    
+    def encode_obs(self, obs, is_teacher=False, start_idx=None):
+        """Encode the observations using either student or teacher encoder."""
+        if not self.encoder_obs or (not self.student_encoder and not self.teacher_encoder):
+            return obs
+            
+        if start_idx is None:
+            start_idx = self.encoder_cfg.get("obs_indices", 36)
+            
+        selected_obs = obs[:,start_idx:]
+        
+        if is_teacher:
+            encoded_obs = self.teacher_encoder(selected_obs)
+        else:
+            encoded_obs = self.student_encoder(selected_obs)
+        
+        modified_obs = obs.clone()
+        modified_obs = modified_obs[:,:start_idx]
+        modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
+        
+        return modified_obs
+
+    def save(self, path: str, infos=None):
+        """Return encoder state dicts if encoders are present."""
+        if self.encoder_obs and self.student_encoder and self.teacher_encoder:
+            return {
+                "student_encoder_state_dict": self.student_encoder.state_dict(),
+                "teacher_encoder_state_dict": self.teacher_encoder.state_dict(),
+                "student_encoder_optimizer_state_dict": self.student_encoder_optimizer.state_dict(),
+            }
+        return {}
+
+    def load(self, state_dict):
+        """Load encoder states if present."""
+        if self.encoder_obs and self.student_encoder and self.teacher_encoder:
+            # Load student encoder state and optimizer
+            if "student_encoder_state_dict" in state_dict:
+                self.student_encoder.load_state_dict(state_dict["student_encoder_state_dict"])
+                self.student_encoder_optimizer.load_state_dict(state_dict["student_encoder_optimizer_state_dict"])
+            
+            # Load teacher encoder state only (teacher is frozen)
+            if "teacher_encoder_state_dict" in state_dict:
+                self.teacher_encoder.load_state_dict(state_dict["teacher_encoder_state_dict"])
+                # Ensure teacher encoder remains frozen after loading
+                for param in self.teacher_encoder.parameters():
+                    param.requires_grad = False
+                self.teacher_encoder.eval()
+
+    def load_teacher_encoder(self, state_dict):
+        """Load teacher encoder parameters only (for distillation after RL training)."""
+        if self.encoder_obs and self.teacher_encoder:
+            self.teacher_encoder.load_state_dict(state_dict["encoder_state_dict"])
+            # Freeze teacher encoder parameters
+            for param in self.teacher_encoder.parameters():
+                param.requires_grad = False
+            self.teacher_encoder.eval()  # Set teacher encoder to evaluation mode
 
     """
     Helper functions

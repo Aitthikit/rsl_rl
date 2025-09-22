@@ -12,6 +12,7 @@ from itertools import chain
 
 from rsl_rl.modules import ActorCritic
 from rsl_rl.modules.rnd import RandomNetworkDistillation
+from rsl_rl.modules import obs_encoder
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import string_to_callable
 
@@ -99,6 +100,11 @@ class PPO:
         # Create rollout storage
         self.storage: RolloutStorage = None  # type: ignore
         self.transition = RolloutStorage.Transition()
+        
+        # Encoder components
+        self.encoder_obs = False
+        self.encoder = None
+        self.encoder_optimizer = None
 
         # PPO parameters
         self.clip_param = clip_param
@@ -138,7 +144,7 @@ class PPO:
     def act(self, obs, critic_obs):
         if self.policy.is_recurrent:
             self.transition.hidden_states = self.policy.get_hidden_states()
-            # print(f"Hidden states: {self.transition.hidden_states.shape}")
+
         # compute the actions and values
         self.transition.actions = self.policy.act(obs).detach()
         self.transition.values = self.policy.evaluate(critic_obs).detach()
@@ -148,9 +154,6 @@ class PPO:
         # need to record obs and critic_obs before env.step()
         self.transition.observations = obs
         self.transition.privileged_observations = critic_obs
-        # print(self.transition.values.shape)
-        # print(obs.shape)
-        # print(critic_obs.shape)
         return self.transition.actions
 
     def process_env_step(self, rewards, dones, infos):
@@ -344,6 +347,16 @@ class PPO:
 
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
 
+            # Encoder loss and update
+            if self.encoder_obs:
+                # Update encoder using the policy losses
+                self.encoder_optimizer.zero_grad()
+                encoder_loss = loss.clone()  # Use the same loss for encoder
+                if encoder_loss.requires_grad:
+                    encoder_loss.backward(retain_graph=True)
+                    torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
+                    self.encoder_optimizer.step()
+
             # Symmetry loss
             if self.symmetry:
                 # obtain the symmetric actions
@@ -446,6 +459,100 @@ class PPO:
             loss_dict["symmetry"] = mean_symmetry_loss
 
         return loss_dict
+
+    """
+    Encoder functions
+    """
+    
+    def initialize_encoder(self, encoder_cfg, obs_shape):
+        """Initialize the observation encoder based on configuration."""
+        self.encoder_obs = True
+        self.encoder_cfg = encoder_cfg
+        
+        # Get encoder configuration
+        encoder_type = self.encoder_cfg.get("type", "mlp")  # Default to MLP if not specified
+        input_dim = obs_shape
+        output_dim = self.encoder_cfg.get("output_dim", 8)
+        
+        # Initialize encoder based on type
+        encoder_params = {
+            "input_dim": input_dim,
+            "output_dim": output_dim,
+            "hidden_dims": self.encoder_cfg.get("hidden_dims", [256, 128])
+        }
+        
+        if encoder_type == "mlp":
+            self.encoder = obs_encoder.ObsEncoder(**encoder_params).to(self.device)
+            print(f"MLP Encoder Structure: {self.encoder}")
+        
+        elif encoder_type == "gru":
+            # Add GRU specific parameters
+            encoder_params.update({
+                "gru_hidden_size": self.encoder_cfg.get("gru_hidden_size", 256),
+                "gru_num_layers": self.encoder_cfg.get("gru_num_layers", 2)
+            })
+            self.encoder = obs_encoder.GRUEncoder(**encoder_params).to(self.device)
+            print(f"GRU Encoder Structure: {self.encoder}")
+        
+        elif encoder_type == "conv":
+            # Add Conv specific parameters
+            encoder_params.update({
+                "conv_channels": self.encoder_cfg.get("conv_channels", [32, 64, 128]),
+                "conv_kernel_sizes": self.encoder_cfg.get("conv_kernel_sizes", [3, 3, 3]),
+                "conv_strides": self.encoder_cfg.get("conv_strides", [1, 1, 1])
+            })
+            self.encoder = obs_encoder.ConvEncoder(**encoder_params).to(self.device)
+            print(f"Conv Encoder Structure: {self.encoder}")
+            
+        elif encoder_type == "convgru":
+            # Add ConvGRU specific parameters
+            encoder_params.update({
+                "input_shape": self.encoder_cfg.get("input_shape", (3, 64, 64)),  # (channels, height, width)
+                "conv_channels": self.encoder_cfg.get("conv_channels", [32, 64, 128]),
+                "conv_kernel_sizes": self.encoder_cfg.get("conv_kernel_sizes", [3, 3, 3]),
+                "conv_strides": self.encoder_cfg.get("conv_strides", [2, 2, 2]),
+                "gru_hidden_size": self.encoder_cfg.get("gru_hidden_size", 256),
+                "gru_num_layers": self.encoder_cfg.get("gru_num_layers", 1)
+            })
+            self.encoder = obs_encoder.ConvGRUEncoder(**encoder_params).to(self.device)
+            print(f"ConvGRU Encoder Structure: {self.encoder}")
+        else:
+            raise ValueError(f"Unsupported encoder type: {encoder_type}")
+        
+        # Initialize optimizer
+        self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.encoder_cfg.get("learning_rate", 3e-4))
+    
+    def encode_obs(self, obs, start_idx=None):
+        """Encode the observations using the encoder."""
+        if not self.encoder_obs or not self.encoder:
+            return obs
+            
+        if start_idx is None:
+            start_idx = self.encoder_cfg.get("obs_indices", 36)
+            
+        selected_obs = obs[:,start_idx:]
+        encoded_obs = self.encoder(selected_obs)
+        
+        modified_obs = obs.clone()
+        modified_obs = modified_obs[:,:start_idx]
+        modified_obs = torch.cat([modified_obs, encoded_obs], dim=1)
+        
+        return modified_obs
+
+    def save(self, path: str, infos=None):
+        """Return encoder state dict if encoder is present."""
+        if self.encoder_obs and self.encoder:
+            return {
+                "encoder_state_dict": self.encoder.state_dict(),
+                "encoder_optimizer_state_dict": self.encoder_optimizer.state_dict(),
+            }
+        return {}
+
+    def load(self, state_dict):
+        """Load encoder state if present."""
+        if self.encoder_obs and self.encoder and "encoder_state_dict" in state_dict:
+            self.encoder.load_state_dict(state_dict["encoder_state_dict"])
+            self.encoder_optimizer.load_state_dict(state_dict["encoder_optimizer_state_dict"])
 
     """
     Helper functions
