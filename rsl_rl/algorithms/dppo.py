@@ -578,9 +578,8 @@ class DPPO:
 
     def load(self, saved_dict):
         """Load model including encoder if present."""
-        self.policy.load_state_dict(saved_dict["model_state_dict"])
-        self.optimizer.load_state_dict(saved_dict["optimizer_state_dict"])
-        
+        # self.policy.load_state_dict(saved_dict["model_state_dict"])
+        # self.optimizer.load_state_dict(saved_dict["optimizer_state_dict"])
         if self.encoder_obs and self.encoder and "encoder_state_dict" in saved_dict:
             self.encoder.load_state_dict(saved_dict["encoder_state_dict"])
             self.encoder_optimizer.load_state_dict(saved_dict["encoder_optimizer_state_dict"])

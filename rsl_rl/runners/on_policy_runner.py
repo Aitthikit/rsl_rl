@@ -63,8 +63,6 @@ class OnPolicyRunner:
             output_dim = self.encoder_cfg.get("output_dim", 8)
             
             # Initialize the encoder in DPPO if that's the algorithm being used
-            if self.training_type == "dppo":
-                self.alg.initialize_encoder(self.encoder_cfg, input_dim)
                 
             # Update observation dimension
             num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
@@ -122,9 +120,16 @@ class OnPolicyRunner:
 
         # initialize algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))
+        print(f"Algorithm: {alg_class}")
         self.alg: PPO | Distillation | DPPO = alg_class(
             policy, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg
         )
+        if self.encoder_obs:
+            self.alg.initialize_encoder(self.encoder_cfg, input_dim)
+
+        if self.navigate:
+            self.alg.load(torch.load(self.env.cfg.encoderbase_model)["encoder_state_dict"])
+            print("Loaded additional states from the algorithm.(Encoder!!!!!!!!!!)")
 
         # store training configuration
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
@@ -210,7 +215,7 @@ class OnPolicyRunner:
         obs, extras = self.env.get_observations()
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
-        if self.encoder_obs and self.training_type == "dppo":
+        if self.encoder_obs :
                 modified_obs = self.alg.encode_obs(obs)
                 modified_privileged_obs = self.alg.encode_obs(privileged_obs)
         else:
@@ -274,7 +279,7 @@ class OnPolicyRunner:
                     else:
                         privileged_obs = obs
 
-                    if self.encoder_obs and self.training_type == "dppo":
+                    if self.encoder_obs :
                         modified_obs = self.alg.encode_obs(obs)
                         modified_privileged_obs = self.alg.encode_obs(privileged_obs)
                     else:

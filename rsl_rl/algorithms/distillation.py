@@ -184,66 +184,42 @@ class Distillation:
         self.encoder_obs = True
         self.encoder_cfg = encoder_cfg
         
-        # Get encoder configuration
-        encoder_type = self.encoder_cfg.get("type", "mlp")  # Default to MLP if not specified
-        student_output_dim = self.encoder_cfg.get("student_output_dim", 8)
-        teacher_output_dim = self.encoder_cfg.get("teacher_output_dim", 8)
+        # Get encoder configurations
+        student_type = self.encoder_cfg.get("student_type", "mlp")  # Default to MLP if not specified
+        teacher_type = self.encoder_cfg.get("teacher_type", "mlp")  # Default to MLP if not specified
+        student_output_dim = self.encoder_cfg.get("output_dim", 8)
+        teacher_output_dim = self.encoder_cfg.get("output_dim", 8)
         
-        # Student encoder parameters
+        # Base parameters for both encoders
         student_params = {
             "input_dim": student_obs_shape,
             "output_dim": student_output_dim,
             "hidden_dims": self.encoder_cfg.get("student_hidden_dims", [256, 128])
         }
         
-        # Teacher encoder parameters
         teacher_params = {
             "input_dim": teacher_obs_shape,
             "output_dim": teacher_output_dim,
             "hidden_dims": self.encoder_cfg.get("teacher_hidden_dims", [256, 128])
         }
-        
-        # Initialize encoders based on type
-        if encoder_type == "mlp":
+
+        # Initialize student encoder based on type
+        if student_type == "mlp":
             self.student_encoder = obs_encoder.ObsEncoder(**student_params).to(self.device)
-            self.teacher_encoder = obs_encoder.ObsEncoder(**teacher_params).to(self.device)
-            print(f"MLP Student Encoder Structure: {self.student_encoder}")
-            print(f"MLP Teacher Encoder Structure: {self.teacher_encoder}")
-        
-        elif encoder_type == "gru":
-            # Add GRU specific parameters
+        elif student_type == "gru":
             student_params.update({
                 "gru_hidden_size": self.encoder_cfg.get("student_gru_hidden_size", 256),
                 "gru_num_layers": self.encoder_cfg.get("student_gru_num_layers", 2)
             })
-            teacher_params.update({
-                "gru_hidden_size": self.encoder_cfg.get("teacher_gru_hidden_size", 256),
-                "gru_num_layers": self.encoder_cfg.get("teacher_gru_num_layers", 2)
-            })
             self.student_encoder = obs_encoder.GRUEncoder(**student_params).to(self.device)
-            self.teacher_encoder = obs_encoder.GRUEncoder(**teacher_params).to(self.device)
-            print(f"GRU Student Encoder Structure: {self.student_encoder}")
-            print(f"GRU Teacher Encoder Structure: {self.teacher_encoder}")
-        
-        elif encoder_type == "conv":
-            # Add Conv specific parameters
+        elif student_type == "conv":
             student_params.update({
                 "conv_channels": self.encoder_cfg.get("student_conv_channels", [32, 64, 128]),
                 "conv_kernel_sizes": self.encoder_cfg.get("student_conv_kernel_sizes", [3, 3, 3]),
                 "conv_strides": self.encoder_cfg.get("student_conv_strides", [1, 1, 1])
             })
-            teacher_params.update({
-                "conv_channels": self.encoder_cfg.get("teacher_conv_channels", [32, 64, 128]),
-                "conv_kernel_sizes": self.encoder_cfg.get("teacher_conv_kernel_sizes", [3, 3, 3]),
-                "conv_strides": self.encoder_cfg.get("teacher_conv_strides", [1, 1, 1])
-            })
             self.student_encoder = obs_encoder.ConvEncoder(**student_params).to(self.device)
-            self.teacher_encoder = obs_encoder.ConvEncoder(**teacher_params).to(self.device)
-            print(f"Conv Student Encoder Structure: {self.student_encoder}")
-            print(f"Conv Teacher Encoder Structure: {self.teacher_encoder}")
-            
-        elif encoder_type == "convgru":
-            # Add ConvGRU specific parameters
+        elif student_type == "convgru":
             student_params.update({
                 "input_shape": self.encoder_cfg.get("student_input_shape", (3, 64, 64)),
                 "conv_channels": self.encoder_cfg.get("student_conv_channels", [32, 64, 128]),
@@ -252,6 +228,29 @@ class Distillation:
                 "gru_hidden_size": self.encoder_cfg.get("student_gru_hidden_size", 256),
                 "gru_num_layers": self.encoder_cfg.get("student_gru_num_layers", 1)
             })
+            self.student_encoder = obs_encoder.ConvGRUEncoder(**student_params).to(self.device)
+        else:
+            raise ValueError(f"Unsupported student encoder type: {student_type}")
+            
+        print(f"{student_type.upper()} Student Encoder Structure: {self.student_encoder}")
+
+        # Initialize teacher encoder based on type
+        if teacher_type == "mlp":
+            self.teacher_encoder = obs_encoder.ObsEncoder(**teacher_params).to(self.device)
+        elif teacher_type == "gru":
+            teacher_params.update({
+                "gru_hidden_size": self.encoder_cfg.get("teacher_gru_hidden_size", 256),
+                "gru_num_layers": self.encoder_cfg.get("teacher_gru_num_layers", 2)
+            })
+            self.teacher_encoder = obs_encoder.GRUEncoder(**teacher_params).to(self.device)
+        elif teacher_type == "conv":
+            teacher_params.update({
+                "conv_channels": self.encoder_cfg.get("teacher_conv_channels", [32, 64, 128]),
+                "conv_kernel_sizes": self.encoder_cfg.get("teacher_conv_kernel_sizes", [3, 3, 3]),
+                "conv_strides": self.encoder_cfg.get("teacher_conv_strides", [1, 1, 1])
+            })
+            self.teacher_encoder = obs_encoder.ConvEncoder(**teacher_params).to(self.device)
+        elif teacher_type == "convgru":
             teacher_params.update({
                 "input_shape": self.encoder_cfg.get("teacher_input_shape", (3, 64, 64)),
                 "conv_channels": self.encoder_cfg.get("teacher_conv_channels", [32, 64, 128]),
@@ -260,12 +259,11 @@ class Distillation:
                 "gru_hidden_size": self.encoder_cfg.get("teacher_gru_hidden_size", 256),
                 "gru_num_layers": self.encoder_cfg.get("teacher_gru_num_layers", 1)
             })
-            self.student_encoder = obs_encoder.ConvGRUEncoder(**student_params).to(self.device)
             self.teacher_encoder = obs_encoder.ConvGRUEncoder(**teacher_params).to(self.device)
-            print(f"ConvGRU Student Encoder Structure: {self.student_encoder}")
-            print(f"ConvGRU Teacher Encoder Structure: {self.teacher_encoder}")
         else:
-            raise ValueError(f"Unsupported encoder type: {encoder_type}")
+            raise ValueError(f"Unsupported teacher encoder type: {teacher_type}")
+            
+        print(f"{teacher_type.upper()} Teacher Encoder Structure: {self.teacher_encoder}")
         
         # Initialize optimizer for student encoder only
         self.student_encoder_optimizer = torch.optim.Adam(
