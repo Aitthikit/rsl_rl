@@ -63,6 +63,8 @@ class OnPolicyRunner:
             output_dim = self.encoder_cfg.get("output_dim", 8)
             
             # Initialize the encoder in DPPO if that's the algorithm being used
+            # if self.training_type == "dppo":
+            #     self.alg.initialize_encoder(self.encoder_cfg, input_dim)
                 
             # Update observation dimension
             num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
@@ -131,6 +133,9 @@ class OnPolicyRunner:
             self.alg.load(torch.load(self.env.cfg.encoderbase_model)["encoder_state_dict"])
             print("Loaded additional states from the algorithm.(Encoder!!!!!!!!!!)")
 
+        if self.navigate:
+            self.alg.load(torch.load(self.env.cfg.encoderbase_model)["encoder_state_dict"])
+            print("Loaded additional states from the algorithm.(Encoder!!!!!!!!!!)")
         # store training configuration
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
