@@ -141,7 +141,7 @@ class PPO:
             self.device,
         )
 
-    def act(self, obs, critic_obs):
+    def act(self, obs, critic_obs, extras = None):
         if self.policy.is_recurrent:
             self.transition.hidden_states = self.policy.get_hidden_states()
 
@@ -522,7 +522,7 @@ class PPO:
         # Initialize optimizer
         self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.encoder_cfg.get("learning_rate", 3e-4))
     
-    def encode_obs(self, obs, start_idx=None):
+    def encode_obs(self, obs, start_idx=None, extras = None):
         """Encode the observations using the encoder."""
         if not self.encoder_obs or not self.encoder:
             return obs

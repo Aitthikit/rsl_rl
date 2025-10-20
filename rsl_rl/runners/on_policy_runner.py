@@ -46,6 +46,8 @@ class OnPolicyRunner:
             self.navigate = self.policy_cfg.get("navigates", False)
         elif self.alg_cfg["class_name"] == "Distillation":
             self.training_type = "distillation"
+            self.encoder_obs = self.policy_cfg.get("encoder_obs", False)
+            self.navigate = self.policy_cfg.get("navigates", False)
         elif self.alg_cfg["class_name"] == "DPPO":
             self.training_type = "dppo"
             self.encoder_obs = self.policy_cfg.get("encoder_obs", False)
@@ -57,17 +59,7 @@ class OnPolicyRunner:
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
 
-        if self.encoder_obs:
-            self.encoder_cfg = train_cfg["encoder"]
-            input_dim = obs[:,self.encoder_cfg.get("obs_indices", 36):].shape[1]
-            output_dim = self.encoder_cfg.get("output_dim", 8)
-            
-            # Initialize the encoder in DPPO if that's the algorithm being used
-            # if self.training_type == "dppo":
-            #     self.alg.initialize_encoder(self.encoder_cfg, input_dim)
-                
-            # Update observation dimension
-            num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
+        
 
         # print(f"MLP Encoder Structure: {self.obs_encoder}")
 
@@ -90,9 +82,29 @@ class OnPolicyRunner:
             else:
                 self.privileged_obs_type = None
 
+        if self.encoder_obs:
+            self.encoder_cfg = train_cfg["encoder"]
+            if "perception" in extras["observations"] and self.training_type == "distillation":
+                input_dim = extras["observations"].get("perception", obs).shape[1:]
+                privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
+                teacher_input_dim = privileged_obs[:,self.encoder_cfg.get("obs_indices", 36):].shape[1]
+            else:
+                input_dim = obs[:,self.encoder_cfg.get("obs_indices", 36):].shape[1]
+
+            output_dim = self.encoder_cfg.get("output_dim", 8)
+            
+            # Initialize the encoder in DPPO if that's the algorithm being used
+            # if self.training_type == "dppo":
+            #     self.alg.initialize_encoder(self.encoder_cfg, input_dim)
+                
+            # Update observation dimension
+            num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
+
         # resolve dimensions of privileged observations
         if self.privileged_obs_type is not None:
-            num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
+            # num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
+            num_privileged_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim -  self.encoder_cfg.get("privilaged_obs_indices", 0)
+            print(f"num_privileged_obs: {num_privileged_obs}")
         else:
             num_privileged_obs = num_obs
 
@@ -127,15 +139,16 @@ class OnPolicyRunner:
             policy, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg
         )
         if self.encoder_obs:
-            self.alg.initialize_encoder(self.encoder_cfg, input_dim)
+            if self.training_type == "distillation":
+                self.alg.initialize_encoders(self.encoder_cfg, input_dim ,teacher_input_dim)
+                self.alg.load_teacher_encoder(torch.load(self.env.cfg.encoderbase_model))
+            else:
+                self.alg.initialize_encoder(self.encoder_cfg, input_dim)
 
         if self.navigate:
-            self.alg.load(torch.load(self.env.cfg.encoderbase_model)["encoder_state_dict"])
+            self.alg.load(torch.load(self.env.cfg.encoderbase_model))
             print("Loaded additional states from the algorithm.(Encoder!!!!!!!!!!)")
 
-        if self.navigate:
-            self.alg.load(torch.load(self.env.cfg.encoderbase_model)["encoder_state_dict"])
-            print("Loaded additional states from the algorithm.(Encoder!!!!!!!!!!)")
         # store training configuration
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
@@ -217,12 +230,15 @@ class OnPolicyRunner:
             )
 
         # start learning
-        obs, extras = self.env.get_observations()
-        privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
+        obs, infos = self.env.get_observations()
+        privileged_obs = infos["observations"].get(self.privileged_obs_type, obs)
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
         if self.encoder_obs :
-                modified_obs = self.alg.encode_obs(obs)
-                modified_privileged_obs = self.alg.encode_obs(privileged_obs)
+                modified_obs = self.alg.encode_obs(obs,extras=infos)
+                if self.training_type == "distillation":
+                    modified_privileged_obs = self.alg.encode_obs(privileged_obs,start_idx=self.encoder_cfg.get("obs_indices", 36)-self.encoder_cfg.get("privilaged_obs_indices", 0), is_teacher=True)
+                else:
+                    modified_privileged_obs = self.alg.encode_obs(privileged_obs,start_idx=self.encoder_cfg.get("obs_indices", 36)-self.encoder_cfg.get("privilaged_obs_indices", 0))
         else:
                 modified_obs = obs
                 modified_privileged_obs = privileged_obs
@@ -265,11 +281,18 @@ class OnPolicyRunner:
                     #######################################
                     # Sample actions
                     # print(modified_obs[0,:])
-
-                    if self.encoder_obs:
-                        actions = self.alg.act(modified_obs, modified_privileged_obs)
+                    if self.training_type == "dppo":
+                        beta = modified_obs[:,self.encoder_cfg.get("obs_indices", 36)-self.encoder_cfg.get("privilaged_obs_indices", 0)]
+                        if self.encoder_obs:
+                            actions = self.alg.act(modified_obs, modified_privileged_obs,beta=beta, extras=infos)
+                        else:
+                            actions = self.alg.act(obs, privileged_obs,beta=beta, extras=infos)
                     else:
-                        actions = self.alg.act(obs, privileged_obs)
+                        if self.encoder_obs:
+                            actions = self.alg.act(modified_obs, modified_privileged_obs, extras=infos)
+                        else:
+                            actions = self.alg.act(obs, privileged_obs, extras=infos)
+                    
                     # Step the environment
                     obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
                     # Move to device
@@ -285,8 +308,11 @@ class OnPolicyRunner:
                         privileged_obs = obs
 
                     if self.encoder_obs :
-                        modified_obs = self.alg.encode_obs(obs)
-                        modified_privileged_obs = self.alg.encode_obs(privileged_obs)
+                        modified_obs = self.alg.encode_obs(obs,extras=infos)
+                        if self.training_type == "distillation":
+                            modified_privileged_obs = self.alg.encode_obs(privileged_obs,start_idx=self.encoder_cfg.get("obs_indices", 36)-self.encoder_cfg.get("privilaged_obs_indices", 0), is_teacher=True)
+                        else:
+                            modified_privileged_obs = self.alg.encode_obs(privileged_obs,start_idx=self.encoder_cfg.get("obs_indices", 36)-self.encoder_cfg.get("privilaged_obs_indices", 0))
                     else:
                         modified_obs = obs
                         modified_privileged_obs = privileged_obs
@@ -337,10 +363,11 @@ class OnPolicyRunner:
                     else:
                         self.alg.compute_returns(privileged_obs)
                 if self.training_type == "dppo":
+                    beta = modified_obs[:,self.encoder_cfg.get("obs_indices", 36)-1]
                     if self.encoder_obs:
-                        self.alg.compute_returns(modified_privileged_obs)
+                        self.alg.compute_returns(modified_privileged_obs, beta=beta)
                     else:
-                        self.alg.compute_returns(privileged_obs)
+                        self.alg.compute_returns(privileged_obs, beta=beta)
 
             # update policy
             loss_dict = self.alg.update()
@@ -525,12 +552,7 @@ class OnPolicyRunner:
             self.alg.load(loaded_dict)
 
         if self.training_type == "distillation":
-            print(
-                "Warning: Encoder parameters not loaded. If you are loading a model for distillation after RL training, "
-                "this is expected. Otherwise, if you are resuming RL training, please make sure that the encoder "
-                "configuration is the same as the one used for training."
-            )
-            self.alg.load_teacher_encoder()
+            pass
 
         # -- Load RND model if used
         if self.alg.rnd:

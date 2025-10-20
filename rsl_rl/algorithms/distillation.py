@@ -91,13 +91,14 @@ class Distillation:
             self.device,
         )
 
-    def act(self, obs, teacher_obs):
+    def act(self, obs, teacher_obs, extras = None):
         # compute the actions
         self.transition.actions = self.policy.act(obs).detach()
         self.transition.privileged_actions = self.policy.evaluate(teacher_obs).detach()
         # record the observations
         self.transition.observations = obs
         self.transition.privileged_observations = teacher_obs
+        self.transition.perception_obs = extras["observations"].get("perception", None) if extras is not None and "observations" in extras else None
         return self.transition.actions
 
     def process_env_step(self, rewards, dones, infos):
@@ -118,46 +119,57 @@ class Distillation:
         for epoch in range(self.num_learning_epochs):
             self.policy.reset(hidden_states=self.last_hidden_states)
             self.policy.detach_hidden_states()
-            for obs, _, _, privileged_actions, dones in self.storage.generator():
+            for obs, _, _, privileged_actions, dones,perception in self.storage.generator():
 
                 # inference the student for gradient computation
                 actions = self.policy.act_inference(obs)
 
                 # Encode observations if encoder is enabled
                 if self.encoder_obs:
-                    encoded_obs = self.encode_obs(obs, is_teacher=False)
+                    encoded_obs = self.encode_obs(obs, is_teacher=False, extras=perception)
                     actions = self.policy.act_inference(encoded_obs)
-                    
+
+                    # encoder_loss = self.loss_fn(encoded_obs, obs)
+                    # TODO : Add encoder loss to total loss
                     # Get teacher encoded observations (using frozen encoder)
-                    encoded_privileged_obs = self.encode_obs(obs, is_teacher=True)
-                    
-                    # Update student encoder only
-                    self.student_encoder_optimizer.zero_grad()
-                    behavior_loss = self.loss_fn(actions, privileged_actions)
-                    student_loss = behavior_loss.clone()
-                    if student_loss.requires_grad:
-                        student_loss.backward()
-                        if self.max_grad_norm:
-                            torch.nn.utils.clip_grad_norm_(self.student_encoder.parameters(), self.max_grad_norm)
-                        self.student_encoder_optimizer.step()
+                    # encoded_privileged_obs = self.encode_obs(obs, is_teacher=True)
                 else:
                     # Regular behavior cloning loss without encoders
-                    behavior_loss = self.loss_fn(actions, privileged_actions)
+                    actions = self.policy.act_inference(obs)
+                
+                # Compute behavior loss
+                behavior_loss = self.loss_fn(actions, privileged_actions)
 
-                # total loss
+                # Accumulate loss
                 loss = loss + behavior_loss
                 mean_behavior_loss += behavior_loss.item()
                 cnt += 1
 
                 # gradient step
                 if cnt % self.gradient_length == 0:
+                    # Zero gradients for both policy and encoder
                     self.optimizer.zero_grad()
-                    loss.backward()
+                    if self.encoder_obs:
+                        self.student_encoder_optimizer.zero_grad()
+                    
+                    # Backward pass with retain_graph=True for the first backward
+                    loss.backward(retain_graph=True if self.encoder_obs else False)
+                    
+                    # Apply gradient clipping if needed
+                    if self.max_grad_norm:
+                        if self.encoder_obs:
+                            torch.nn.utils.clip_grad_norm_(self.student_encoder.parameters(), self.max_grad_norm)
+                        nn.utils.clip_grad_norm_(self.policy.student.parameters(), self.max_grad_norm)
+                    
+                    # Reduce parameters for multi-GPU setup
                     if self.is_multi_gpu:
                         self.reduce_parameters()
-                    if self.max_grad_norm:
-                        nn.utils.clip_grad_norm_(self.policy.student.parameters(), self.max_grad_norm)
+                    
+                    # Optimization step
+                    if self.encoder_obs:
+                        self.student_encoder_optimizer.step()
                     self.optimizer.step()
+                    
                     self.policy.detach_hidden_states()
                     loss = 0
 
@@ -189,7 +201,6 @@ class Distillation:
         teacher_type = self.encoder_cfg.get("teacher_type", "mlp")  # Default to MLP if not specified
         student_output_dim = self.encoder_cfg.get("output_dim", 8)
         teacher_output_dim = self.encoder_cfg.get("output_dim", 8)
-        
         # Base parameters for both encoders
         student_params = {
             "input_dim": student_obs_shape,
@@ -221,10 +232,10 @@ class Distillation:
             self.student_encoder = obs_encoder.ConvEncoder(**student_params).to(self.device)
         elif student_type == "convgru":
             student_params.update({
-                "input_shape": self.encoder_cfg.get("student_input_shape", (3, 64, 64)),
+                # "input_shape": self.encoder_cfg.get("student_input_shape", (3, 64, 64)),
                 "conv_channels": self.encoder_cfg.get("student_conv_channels", [32, 64, 128]),
                 "conv_kernel_sizes": self.encoder_cfg.get("student_conv_kernel_sizes", [3, 3, 3]),
-                "conv_strides": self.encoder_cfg.get("student_conv_strides", [2, 2, 2]),
+                "pool_sizes": self.encoder_cfg.get("student_pool_sizes", [2, 2, 2]),
                 "gru_hidden_size": self.encoder_cfg.get("student_gru_hidden_size", 256),
                 "gru_num_layers": self.encoder_cfg.get("student_gru_num_layers", 1)
             })
@@ -278,7 +289,7 @@ class Distillation:
         self.teacher_encoder.eval()  # Set teacher encoder to evaluation mode
         self.teacher_encoder_optimizer = None  # No optimizer needed for teacher
     
-    def encode_obs(self, obs, is_teacher=False, start_idx=None):
+    def encode_obs(self, obs, is_teacher=False, start_idx=None , extras = None):
         """Encode the observations using either student or teacher encoder."""
         if not self.encoder_obs or (not self.student_encoder and not self.teacher_encoder):
             return obs
@@ -287,11 +298,16 @@ class Distillation:
             start_idx = self.encoder_cfg.get("obs_indices", 36)
             
         selected_obs = obs[:,start_idx:]
-        
         if is_teacher:
             encoded_obs = self.teacher_encoder(selected_obs)
         else:
-            encoded_obs = self.student_encoder(selected_obs)
+            if extras is not None :
+                if type(extras) == dict:
+                    encoded_obs = self.student_encoder(extras["observations"]["perception"].to(self.device))
+                else:
+                    encoded_obs = self.student_encoder(extras)
+            else:
+                encoded_obs = self.student_encoder(selected_obs)
         
         modified_obs = obs.clone()
         modified_obs = modified_obs[:,:start_idx]
@@ -328,6 +344,7 @@ class Distillation:
     def load_teacher_encoder(self, state_dict):
         """Load teacher encoder parameters only (for distillation after RL training)."""
         if self.encoder_obs and self.teacher_encoder:
+            # print(state_dict.keys())
             self.teacher_encoder.load_state_dict(state_dict["encoder_state_dict"])
             # Freeze teacher encoder parameters
             for param in self.teacher_encoder.parameters():

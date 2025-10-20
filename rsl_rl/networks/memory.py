@@ -27,6 +27,7 @@ class Memory(torch.nn.Module):
             if hidden_states is None:
                 raise ValueError("Hidden states not passed to memory module during policy update")
             out, _ = self.rnn(input, hidden_states)
+            # print(f"RNN output shape (batch mode): {out.shape}")
             out = unpad_trajectories(out, masks)
             # print("Unpadded trajectories shape:", out.shape)
         else:

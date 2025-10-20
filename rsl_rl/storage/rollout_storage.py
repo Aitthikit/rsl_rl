@@ -71,6 +71,7 @@ class RolloutStorage:
         # for distillation
         if training_type == "distillation":
             self.privileged_actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
+            self.perception_obs = torch.zeros(num_transitions_per_env, num_envs,  1, 45, 60, device=self.device)
 
         # for reinforcement learning
         if training_type == "rl":
@@ -90,6 +91,7 @@ class RolloutStorage:
             self.returns = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
             self.advantages = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
             self.values_quant = torch.zeros(num_transitions_per_env, num_envs, quantile_count, device=self.device)
+            self.beta = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
 
         # For RND
         if rnd_state_shape is not None:
@@ -118,6 +120,7 @@ class RolloutStorage:
         # for distillation
         if self.training_type == "distillation":
             self.privileged_actions[self.step].copy_(transition.privileged_actions)
+            self.perception_obs[self.step].copy_(transition.perception_obs)
 
         # for reinforcement learning
         if self.training_type == "rl":
@@ -135,6 +138,7 @@ class RolloutStorage:
             # print("values_quant",transition.values_quant.shape)
             # print("self.values_quant",self.values_quant.shape)
             self.values_quant[self.step].copy_(transition.values_quant)
+            self.beta[self.step].copy_(transition.beta)
 
         # For RND
         if self.rnd_state_shape is not None:
@@ -251,7 +255,7 @@ class RolloutStorage:
                 privileged_observations = self.observations[i]
             yield self.observations[i], privileged_observations, self.actions[i], self.privileged_actions[
                 i
-            ], self.dones[i]
+            ], self.dones[i] , self.perception_obs[i]
 
     # for reinforcement learning with feedforward networks
     def mini_batch_generator(self, num_mini_batches, num_epochs=8):
@@ -364,6 +368,7 @@ class RolloutStorage:
                     values_batch = self.values[:, start:stop]
                     old_actions_log_prob_batch = self.actions_log_prob[:, start:stop]
                     values_quant_batch = self.values_target_quant[:, start:stop]
+                    beta = self.beta[:, start:stop]
 
                     # reshape to [num_envs, time, num layers, hidden dim] (original shape: [time, num_layers, num_envs, hidden_dim])
                     # then take only time steps after dones (flattens num envs and time dimensions),
@@ -393,7 +398,7 @@ class RolloutStorage:
                     yield obs_batch, privileged_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
                         hid_a_batch,
                         hid_c_batch,
-                    ), masks_batch, rnd_state_batch , values_quant_batch
+                    ), masks_batch, rnd_state_batch , values_quant_batch ,beta
 
                     first_traj = last_traj
         else:

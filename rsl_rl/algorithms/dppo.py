@@ -147,17 +147,18 @@ class DPPO:
             quantile_count,
         )
 
-    def act(self, obs, critic_obs):
+    def act(self, obs, critic_obs,beta = None , extras = None):
         if self.policy.is_recurrent:
             self.transition.hidden_states = self.policy.get_hidden_states()
 
         # Compute actions and values
         self.transition.actions = self.policy.act(obs).detach()
-        self.transition.values = self.policy.evaluate(critic_obs).detach()
+        self.transition.values = self.policy.evaluate(critic_obs,beta=beta).detach()
         self.transition.values_quant = self.policy.get_last_quantiles().detach().reshape(self.transition.values.shape[0], -1)
         self.transition.actions_log_prob = self.policy.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.policy.action_mean.detach()
         self.transition.action_sigma = self.policy.action_std.detach()
+        self.transition.beta = beta.detach().unsqueeze(1) if beta is not None else None
         # Record observations
         self.transition.observations = obs
         self.transition.privileged_observations = critic_obs
@@ -189,8 +190,8 @@ class DPPO:
         self.transition.clear()
         self.policy.reset(dones)
 
-    def compute_returns(self, last_critic_obs):
-        last_values = self.policy.evaluate(last_critic_obs).detach()
+    def compute_returns(self, last_critic_obs,beta=None):
+        last_values = self.policy.evaluate(last_critic_obs,beta=beta).detach()
         last_values_quant = self.policy.get_last_quantiles().detach().reshape(last_values.shape[0], -1)
         self.storage.compute_returns(
             last_values, self.gamma, self.lam, normalize_advantage=not self.normalize_advantage_per_mini_batch,last_values_quant=last_values_quant
@@ -255,6 +256,7 @@ class DPPO:
             masks_batch,
             rnd_state_batch,
             values_quant_batch,
+            beta,
         ) in generator:
             # old_actions_log_prob_batch = old_actions_log_prob_batch.detach()
             # target_values_batch        = target_values_batch.detach()
@@ -303,9 +305,9 @@ class DPPO:
             self.policy.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             
-            # Get both scalar values and quantile distributions
-            value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
-            quantiles_batch = self.policy.evaluate_quantiles(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
+            # Get both scalar values and quantile 
+            value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1],beta=beta)
+            quantiles_batch = self.policy.evaluate_quantiles(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1],beta=beta)
             # print(f"Quantiles batch shape: {quantiles_batch.shape}, Value batch shape: {value_batch.shape}")
             # Entropy (only for original samples)
             mu_batch = self.policy.action_mean[:original_batch_size].clone()
@@ -544,7 +546,7 @@ class DPPO:
         # Initialize optimizer
         self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.encoder_cfg.get("learning_rate", 3e-4))
     
-    def encode_obs(self, obs, start_idx=None):
+    def encode_obs(self, obs, start_idx=None, extras = None):
         """Encode the observations using the encoder."""
         if not self.encoder_obs or not self.encoder:
             return obs

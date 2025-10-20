@@ -13,7 +13,7 @@ from torch.distributions import Normal
 from typing import List, Union, Tuple, Callable
 
 
-from rsl_rl.utils import resolve_nn_activation
+from rsl_rl.utils import resolve_nn_activation , unpad_trajectories
 
 eps = torch.finfo(torch.float32).eps
 
@@ -64,6 +64,7 @@ def make_distorted_measure(distorted_tau: torch.Tensor) -> Callable:
 
 def risk_measure_wang(qn, beta: Union[float, torch.Tensor] = 0.0) -> Callable:
     """Wang's risk measure."""
+    # print(f"Using Wang's risk measure with beta: {beta.shape if torch.is_tensor(beta) else beta}")
     tau, beta = reshape_measure_parameters(qn, beta)
     distorted_tau = Normal(0, 1).cdf(Normal(0, 1).icdf(tau) + beta)
     return make_distorted_measure(distorted_tau)
@@ -166,7 +167,9 @@ class QuantileCritic(nn.Module):
         else:
             features = input
 
+        # print(f"Features before layers shape: {features.shape}")
         features = squeeze_preserve_batch(self._layers(features))
+        # print(f"Features shape: {features.shape}")
 
         
         # Generate quantiles for each output dimension
@@ -176,7 +179,8 @@ class QuantileCritic(nn.Module):
         # print(f"quantile shape: {quantiles.shape}")
         if distribution:
             return quantiles
-
+        
+            # print(f"Unpadded quantiles shape: {quantiles.shape}")
         # Convert quantiles to values using risk measure
         values = self.quantiles_to_values(quantiles, *measure_args)
         return values
@@ -184,7 +188,14 @@ class QuantileCritic(nn.Module):
     def quantiles_to_values(self, quantiles: torch.Tensor, *measure_args) -> torch.Tensor:
         """Computes values from quantiles."""
         if measure_args:
-            values = self._measure_func(self, *[squeeze_preserve_batch(m) for m in measure_args])(quantiles)
+            temp = [squeeze_preserve_batch(m) for m in measure_args]
+            # print("before",temp[0].dim())
+            # print("Ex batch",temp[0][1:5][0:10] if torch.is_tensor(temp[0]) else temp[0])
+            # print("Ex batch last",temp[0][20:24][0:10] if torch.is_tensor(temp[0]) else temp[0])
+            temp = [temp[0][0]] if temp[0].dim() >= 2 else temp
+            # print("after",temp)
+            values = self._measure_func(self, *temp)(quantiles)
+            # values = self._measure(quantiles) 
         else:
             values = self._measure(quantiles)
         return values
@@ -236,6 +247,7 @@ class Quantile_NN(nn.Module):
         measure_kwargs: dict = {},
         quantile_count=200,
         noise_std_type: str = "scalar",
+        is_beta: bool = False,
         **kwargs,
     ):
         # Handle deprecated arguments
@@ -296,6 +308,7 @@ class Quantile_NN(nn.Module):
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
 
         self.distribution = None
+        self.is_beta = is_beta
         Normal.set_default_validate_args(False)
 
         print(f"Actor MLP: {self.actor}")
@@ -349,13 +362,23 @@ class Quantile_NN(nn.Module):
         input_a = self.memory_a(observations)
         return self.act_inference_b(input_a.squeeze(0))
 
-    def evaluate(self, critic_observations, masks=None, hidden_states=None, **kwargs):
+    def evaluate(self, critic_observations, masks=None, hidden_states=None, beta=None):
         """Evaluate critic - returns scalar values from quantile distribution."""
-        return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False)
+        # print(kwargs)
+        if self.is_beta == True:
+            state_beta = beta
+            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False,measure_args=[state_beta])
+        else:
+            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False,measure_args=[])
 
-    def evaluate_quantiles(self, critic_observations, masks=None, hidden_states=None):
+    def evaluate_quantiles(self, critic_observations, masks=None, hidden_states=None, beta=None):
         """Get full quantile distribution."""
-        return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=True)
+        # print(kwargs)
+        if self.is_beta == True:
+            state_beta = beta
+            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False,measure_args=[state_beta])
+        else:
+            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False,measure_args=[])
 
     def get_last_quantiles(self):
         """Get last quantiles from critic."""
