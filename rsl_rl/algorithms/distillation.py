@@ -113,7 +113,10 @@ class Distillation:
     def update(self):
         self.num_updates += 1
         mean_behavior_loss = 0
-        loss = 0
+        mean_encoder_loss = 0
+        # accumulators for gradient steps must be tensors so we can call backward()
+        policy_loss_accum = torch.tensor(0.0, device=self.device)
+        encoder_loss_accum = torch.tensor(0.0, device=self.device)
         cnt = 0
 
         for epoch in range(self.num_learning_epochs):
@@ -121,69 +124,98 @@ class Distillation:
             self.policy.detach_hidden_states()
             for obs, _, _, privileged_actions, dones,perception in self.storage.generator():
 
-                # inference the student for gradient computation
-                actions = self.policy.act_inference(obs)
-
                 # Encode observations if encoder is enabled
                 if self.encoder_obs:
+                    # get the full modified observation (with encoded tail)
                     encoded_obs = self.encode_obs(obs, is_teacher=False, extras=perception)
-                    actions = self.policy.act_inference(encoded_obs)
 
-                    # encoder_loss = self.loss_fn(encoded_obs, obs)
-                    # TODO : Add encoder loss to total loss
-                    # Get teacher encoded observations (using frozen encoder)
-                    # encoded_privileged_obs = self.encode_obs(obs, is_teacher=True)
+                    # separate the encoded part and ensure the policy forward uses a detached copy
+                    start_idx = self.encoder_cfg.get("obs_indices", 36)
+                    encoded_part = encoded_obs[:, start_idx:]
+
+                    # build policy input where the encoded part is detached to prevent policy loss
+                    policy_input = encoded_obs.clone()
+                    policy_input[:, start_idx:] = encoded_part.detach()
+
+                    actions = self.policy.act_inference(policy_input)
+
+                    # encoder loss compares the encoded representation to the original observation tail
+                    encoder_loss = self.loss_fn(encoded_part, obs[:, start_idx:])
                 else:
                     # Regular behavior cloning loss without encoders
                     actions = self.policy.act_inference(obs)
                 
-                # Compute behavior loss
+                # Compute behavior (policy) loss
                 behavior_loss = self.loss_fn(actions, privileged_actions)
 
-                # Accumulate loss
-                loss = loss + behavior_loss
+                # Accumulate per-component losses
+                policy_loss_accum = policy_loss_accum + behavior_loss
                 mean_behavior_loss += behavior_loss.item()
+                if self.encoder_obs:
+                    encoder_loss_accum = encoder_loss_accum + encoder_loss
+                    mean_encoder_loss += encoder_loss.item()
+
                 cnt += 1
 
                 # gradient step
                 if cnt % self.gradient_length == 0:
-                    # Zero gradients for both policy and encoder
-                    self.optimizer.zero_grad()
+                    # --- Encoder update (student encoder) ---
                     if self.encoder_obs:
+                        # zero encoder grads
                         self.student_encoder_optimizer.zero_grad()
-                    
-                    # Backward pass with retain_graph=True for the first backward
-                    loss.backward(retain_graph=True if self.encoder_obs else False)
-                    
-                    # Apply gradient clipping if needed
-                    if self.max_grad_norm:
-                        if self.encoder_obs:
+                        # backward on accumulated encoder loss
+                        encoder_loss_accum.backward()
+                        # clip encoder grads
+                        if self.max_grad_norm:
                             torch.nn.utils.clip_grad_norm_(self.student_encoder.parameters(), self.max_grad_norm)
+                        # step encoder optimizer
+                        self.student_encoder_optimizer.step()
+
+                    # --- Policy update ---
+                    # zero policy grads
+                    self.optimizer.zero_grad()
+                    # backward on accumulated policy loss
+                    policy_loss_accum.backward()
+
+                    # Apply gradient clipping if needed for policy
+                    if self.max_grad_norm:
                         nn.utils.clip_grad_norm_(self.policy.student.parameters(), self.max_grad_norm)
-                    
-                    # Reduce parameters for multi-GPU setup
+
+                    # Reduce parameters for multi-GPU setup (only policy parameters currently)
                     if self.is_multi_gpu:
                         self.reduce_parameters()
-                    
-                    # Optimization step
-                    if self.encoder_obs:
-                        self.student_encoder_optimizer.step()
+
+                    # step policy optimizer
                     self.optimizer.step()
-                    
+
+                    # reset accumulators and detach hidden states
                     self.policy.detach_hidden_states()
-                    loss = 0
+                    policy_loss_accum = torch.tensor(0.0, device=self.device)
+                    encoder_loss_accum = torch.tensor(0.0, device=self.device)
 
                 # reset dones
                 self.policy.reset(dones.view(-1))
                 self.policy.detach_hidden_states(dones.view(-1))
 
         mean_behavior_loss /= cnt
+        # compute encoder mean if any encoder losses were accumulated
+        if self.encoder_obs:
+            encoder_cnt = 0
+            # derive encoder count from whether encoder was used in storage; fall back to cnt if unknown
+            # we tracked mean_encoder_loss as a sum of items, so divide by number of times it was added
+            # to keep it simple, if mean_encoder_loss is non-zero use cnt as denominator
+            if mean_encoder_loss != 0:
+                mean_encoder_loss = mean_encoder_loss / cnt
+            else:
+                mean_encoder_loss = 0
         self.storage.clear()
         self.last_hidden_states = self.policy.get_hidden_states()
         self.policy.detach_hidden_states()
 
         # construct the loss dictionary
         loss_dict = {"behavior": mean_behavior_loss}
+        if self.encoder_obs:
+            loss_dict["encoder"] = mean_encoder_loss
 
         return loss_dict
 
