@@ -159,23 +159,13 @@ class Distillation:
 
                 # gradient step
                 if cnt % self.gradient_length == 0:
-                    # --- Encoder update (student encoder) ---
-                    if self.encoder_obs:
-                        # zero encoder grads
-                        self.student_encoder_optimizer.zero_grad()
-                        # backward on accumulated encoder loss
-                        encoder_loss_accum.backward()
-                        # clip encoder grads
-                        if self.max_grad_norm:
-                            torch.nn.utils.clip_grad_norm_(self.student_encoder.parameters(), self.max_grad_norm)
-                        # step encoder optimizer
-                        self.student_encoder_optimizer.step()
 
-                    # --- Policy update ---
+                    # --- Policy update (do policy first to avoid freeing shared graph) ---
                     # zero policy grads
                     self.optimizer.zero_grad()
                     # backward on accumulated policy loss
-                    policy_loss_accum.backward()
+                    # if encoder is enabled, retain graph so we can backward encoder loss afterwards
+                    policy_loss_accum.backward(retain_graph=True if self.encoder_obs else False)
 
                     # Apply gradient clipping if needed for policy
                     if self.max_grad_norm:
@@ -187,6 +177,18 @@ class Distillation:
 
                     # step policy optimizer
                     self.optimizer.step()
+
+                    # --- Encoder update (student encoder) ---
+                    if self.encoder_obs:
+                        # zero encoder grads
+                        self.student_encoder_optimizer.zero_grad()
+                        # backward on accumulated encoder loss
+                        encoder_loss_accum.backward()
+                        # clip encoder grads
+                        if self.max_grad_norm:
+                            torch.nn.utils.clip_grad_norm_(self.student_encoder.parameters(), self.max_grad_norm)
+                        # step encoder optimizer
+                        self.student_encoder_optimizer.step()
 
                     # reset accumulators and detach hidden states
                     self.policy.detach_hidden_states()
