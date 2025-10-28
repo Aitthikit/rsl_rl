@@ -364,7 +364,6 @@ class Quantile_NN(nn.Module):
 
     def evaluate(self, critic_observations, masks=None, hidden_states=None, beta=None):
         """Evaluate critic - returns scalar values from quantile distribution."""
-        # print(kwargs)
         if self.is_beta == True:
             state_beta = beta
             return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False,measure_args=[state_beta])
@@ -376,9 +375,9 @@ class Quantile_NN(nn.Module):
         # print(kwargs)
         if self.is_beta == True:
             state_beta = beta
-            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False,measure_args=[state_beta])
+            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=True,measure_args=[state_beta])
         else:
-            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=False,measure_args=[])
+            return self.critic(critic_observations, masks=masks, hidden_states=hidden_states, distribution=True,measure_args=[])
 
     def get_last_quantiles(self):
         """Get last quantiles from critic."""

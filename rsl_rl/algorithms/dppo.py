@@ -367,6 +367,7 @@ class DPPO:
             # Distributional loss (using quantile distributions)
             if self.distributional_loss_type == "energy":
                 distributional_loss = self.compute_distributional_loss(quantiles_batch, values_quant_batch)
+                # print(quantiles_batch,values_quant_batch)
             else:
                 distributional_loss = self.compute_distributional_loss(quantiles_batch, returns_batch)
 
