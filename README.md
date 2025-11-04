@@ -7,14 +7,32 @@ Environment repositories using the framework:
 
 * **`Isaac Lab`** (built on top of NVIDIA Isaac Sim): https://github.com/isaac-sim/IsaacLab (Version 4.5.0)
 
-The my-fix branch supports DPPO algorithm, Student-Teacher Distillation and Perception encoder for Depth camera data.
+The my-fix branch supports DPPO algorithm, Student-Teacher Distillation with Perception encoder for Depth camera data.
 
 **Maintainer**: Aitthikit Kitcharoennon <br/>
 **Contact**: memekhos001@gmail.com <br/>
 
 > **Note:** The DPPO algorithm are maintrained from DPPO in `algorithms` branch. 
 
+## DPPO algorithm
 
+Distribution Proximal Policy Optimization algorithm (DPPO) is 1 of the Distribution Reinforcement Learning algorithm type.
+* Distribution Reinforcement Learning it is the concept of changing from estimating the expected return, which is just a single value indicating how well a policy performs, to estimating the distribution of returns instead, allowing for the analysis of uncertainty and risk.
+
+![Distribution Reinforcement Learning](https://wikidocs.net/images/page/169321/Fig_00.png)
+
+* PPO vs DPPO the difference between 2 algorithm is the normal PPO will use some function like mean or log to compute the value from critic but DPPO will use Risk metric to quantitatively measure risk (Risk Quantification) by applying risk metrics to value distributions. The ones commonly used in robotics are distortion risk.
+
+* Example of risk metric that i use
+  * Wang metric
+
+$$
+g_{\beta}^{\text{wang}}(\tau) = \Phi\big(\Phi^{-1}(\tau) + \beta\big)
+$$
+
+
+
+## Student-Teacher Distillation with Perception encoder for Depth camera data
 
 ## Citing
 
