@@ -329,6 +329,12 @@ class PPO:
             ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
             surrogate = -torch.squeeze(advantages_batch) * ratio
             surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
+            # log_ratio = actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch)
+            # ratio = torch.exp(torch.clamp(log_ratio, -20, 20))  # Prevent extreme ratio values
+            
+            # advantages = torch.squeeze(advantages_batch)
+            # surrogate = -advantages * ratio
+            # surrogate_clipped = -advantages * torch.clamp(
                 ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
             )
             surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
