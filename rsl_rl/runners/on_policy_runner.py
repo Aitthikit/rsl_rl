@@ -103,7 +103,10 @@ class OnPolicyRunner:
         # resolve dimensions of privileged observations
         if self.privileged_obs_type is not None:
             # num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
-            num_privileged_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim -  self.encoder_cfg.get("privilaged_obs_indices", 0)
+            if self.encoder_obs:
+                num_privileged_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim -  self.encoder_cfg.get("privilaged_obs_indices", 0)
+            else:
+                num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
             print(f"num_privileged_obs: {num_privileged_obs}")
         else:
             num_privileged_obs = num_obs
@@ -282,10 +285,11 @@ class OnPolicyRunner:
                     # Sample actions
                     # print(modified_obs[0,:])
                     if self.training_type == "dppo":
-                        beta = modified_obs[:,self.encoder_cfg.get("obs_indices", 36)-self.encoder_cfg.get("privilaged_obs_indices", 0)]
                         if self.encoder_obs:
+                            beta = modified_obs[:,self.encoder_cfg.get("obs_indices", 36)-self.encoder_cfg.get("privilaged_obs_indices", 0)]
                             actions = self.alg.act(modified_obs, modified_privileged_obs,beta=beta, extras=infos)
                         else:
+                            beta = obs[:,-1]  # Using default values when encoder is not used
                             actions = self.alg.act(obs, privileged_obs,beta=beta, extras=infos)
                     else:
                         if self.encoder_obs:
@@ -363,10 +367,11 @@ class OnPolicyRunner:
                     else:
                         self.alg.compute_returns(privileged_obs)
                 if self.training_type == "dppo":
-                    beta = modified_obs[:,self.encoder_cfg.get("obs_indices", 36)-1]
                     if self.encoder_obs:
+                        beta = modified_obs[:,self.encoder_cfg.get("obs_indices", 36)-1]
                         self.alg.compute_returns(modified_privileged_obs, beta=beta)
                     else:
+                        beta = obs[:,-1]  # Using default values when encoder is not used (36-1)
                         self.alg.compute_returns(privileged_obs, beta=beta)
 
             # update policy
