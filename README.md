@@ -65,7 +65,7 @@ Distribution Proximal Policy Optimization algorithm (DPPO) is 1 of the Distribut
 
 * PPO vs DPPO the difference between 2 algorithm is the normal PPO will use mean or log to compute the value from critic but DPPO will use Risk metric to quantitatively measure risk (Risk Quantification) by applying risk metrics to value distributions. The ones commonly used in robotics are distortion risk.
 
-![PPO vs DPPO](../../PPOvsDPPO.png)
+![PPO vs DPPO](PPOvsDPPO.png)
 
 * Example of risk metric that i use
   * Wang metric
@@ -84,7 +84,7 @@ For Student-Teacher Distillation i use base Distillation from rsl_rl in main bra
 
 The reason why we have to train 2 phases is because if we train RL (reinforcement learning) by directly using hard-to-compute perception (ex. depth camera), it may be hard to convert (require many samples).
 
-![Distillation](../../Distillation.png)
+![Distillation](Distillation.png)
 
 
 
