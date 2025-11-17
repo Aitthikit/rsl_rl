@@ -225,7 +225,8 @@ class ConvEncoder(nn.Module):
             conv_layers.extend([
                 nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, 
                          stride=stride, padding=kernel_size//2),
-                nn.ReLU()
+                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=2, stride=2)
             ])
             in_channels = out_channels
             
@@ -258,7 +259,8 @@ class ConvEncoder(nn.Module):
             # Assume input is [batch, features]
             # Reshape to [batch, channels, height, width]
             batch_size = x.size(0)
-            x = x.view(batch_size, 1, -1, 1)
+            # x = x.view(batch_size, 1, -1, 1)
+            x = x.view(batch_size, 1, 11, 11)
             
         # Forward through conv layers
         conv_out = self.conv_layers(x)
