@@ -93,7 +93,7 @@ The reason why we have to train 2 phases is because if we train RL (reinforcemen
 
 For a demo configuration of DPPO, please check the [dppo_config.py](config/dppo_config.py) file.
 
-For a demo configuration of Distillation with Perception encoder,please check the [distillation_with_depth_config.py](config/distillation_with_depth_config.py) file.
+For a demo configuration of Distillation with Perception encoder,please check the [distillation_with_depth_config.py](config/distillation_with_encoder_config.py) file.
 
 > **Note:** Do not forget to create cfg in **`isaaclab_rl`** before use algorithm
 
