@@ -206,18 +206,19 @@ class ConvGRUEncoder(nn.Module):
                 self.hidden[:, dones] = 0.0
         
 class ConvEncoder(nn.Module):
-    def __init__(self, input_dim, conv_channels=[32, 64, 128], conv_kernel_sizes=[3, 3, 3], 
-                 conv_strides=[1, 1, 1], hidden_dims=[256, 128], output_dim=8):
+    def __init__(self, input_dim, conv_channels=[32, 64, 128], conv_kernel_sizes=[3, 3, 3], hidden_dims=[256, 128],
+                 conv_strides=[1, 1, 1], output_dim=8):
         super().__init__()
         
         # Reshape input into pseudo-image format
-        self.input_channels = 1  # Treat features as a 1D signal
-        self.input_height = int(input_dim ** 0.5)  # Square root to make a square image
-        self.input_width = self.input_height
-        if self.input_height * self.input_width < input_dim:
-            self.input_height += 1
+        self.input_channels = input_dim[0]  # C: number of input channels
+        self.input_height = input_dim[1]    # H: height
+        self.input_width = input_dim[2]     # W: width
         
-        # Define convolutional layers
+        # if self.input_height * self.input_width < input_dim:
+        #     self.input_height += 1
+        
+        # Define pure convolutional layers
         conv_layers = []
         in_channels = self.input_channels
         
@@ -229,29 +230,14 @@ class ConvEncoder(nn.Module):
                 nn.MaxPool2d(kernel_size=2, stride=2)
             ])
             in_channels = out_channels
-            
+        
+        # Final output conv layer to match output_dim
+        conv_layers.extend([
+            nn.Conv2d(in_channels, output_dim, kernel_size=1, stride=1, padding=0),
+            nn.AdaptiveAvgPool2d(1)  # Global average pooling to get [batch, output_dim, 1, 1]
+        ])
+        
         self.conv_layers = nn.Sequential(*conv_layers)
-        
-        # Calculate the size of flattened features
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, self.input_channels, self.input_height, self.input_width)
-            conv_out = self.conv_layers(dummy_input)
-            flattened_size = conv_out.numel() // conv_out.size(0)
-        
-        # Define fully connected layers
-        fc_layers = []
-        dims = [flattened_size] + hidden_dims
-        
-        for i in range(len(dims)-1):
-            fc_layers.extend([
-                nn.Linear(dims[i], dims[i+1]),
-                nn.ReLU()
-            ])
-        
-        # Final output layer
-        fc_layers.append(nn.Linear(dims[-1], output_dim))
-        
-        self.fc_layers = nn.Sequential(*fc_layers)
         
     def forward(self, x):
         # If input is not 4D, reshape it
@@ -259,16 +245,12 @@ class ConvEncoder(nn.Module):
             # Assume input is [batch, features]
             # Reshape to [batch, channels, height, width]
             batch_size = x.size(0)
-            # x = x.view(batch_size, 1, -1, 1)
             x = x.view(batch_size, 1, 11, 11)
             
         # Forward through conv layers
         conv_out = self.conv_layers(x)
         
-        # Flatten
-        flattened = conv_out.view(conv_out.size(0), -1)
-        
-        # Forward through fc layers
-        encoded = self.fc_layers(flattened)
+        # Flatten to [batch, output_dim]
+        encoded = conv_out.view(conv_out.size(0), -1)
         
         return encoded
