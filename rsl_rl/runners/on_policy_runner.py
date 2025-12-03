@@ -286,12 +286,6 @@ class OnPolicyRunner:
             # Rollout
             with torch.inference_mode():
                 for _ in range(self.num_steps_per_env):
-                    # Implement conventional Network & GRU for adaptation module here
-                    #######################################
-                     # Encode selected observation indices
-
-                    # print(f"Modified observation shape: {modified_obs.shape}")
-                    #######################################
                     # Sample actions
                     # print(modified_obs[0,:])
                     if self.training_type == "dppo":
