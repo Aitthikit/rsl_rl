@@ -90,23 +90,33 @@ class OnPolicyRunner:
                 teacher_input_dim = privileged_obs[:,self.encoder_cfg.get("obs_indices", 36):].shape[1]
             else:
                 input_dim = obs[:,self.encoder_cfg.get("obs_indices", 36):].shape[1]
-
+            
+        if self.training_type == "distillation":
+            output_dim = self.encoder_cfg.get("student_output_dim", 8)
+            privileged_output_dim = self.encoder_cfg.get("teacher_output_dim", 8)
+        else:
             output_dim = self.encoder_cfg.get("output_dim", 8)
             
             # Initialize the encoder in DPPO if that's the algorithm being used
             # if self.training_type == "dppo":
             #     self.alg.initialize_encoder(self.encoder_cfg, input_dim)
                 
-            # Update observation dimension
-            num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
-
+        # Update observation dimension
+        num_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim
+        print(f"num_obs: {num_obs}")
         # resolve dimensions of privileged observations
         if self.privileged_obs_type is not None:
             # num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
-            if self.encoder_obs:
-                num_privileged_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim -  self.encoder_cfg.get("privilaged_obs_indices", 0)
+            if self.training_type == "distillation":
+                if self.encoder_obs:
+                    num_privileged_obs = self.encoder_cfg.get("obs_indices", 36) + privileged_output_dim -  self.encoder_cfg.get("privilaged_obs_indices", 0)
+                else:
+                    num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
             else:
-                num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
+                if self.encoder_obs:
+                    num_privileged_obs = self.encoder_cfg.get("obs_indices", 36) + output_dim -  self.encoder_cfg.get("privilaged_obs_indices", 0)
+                else:
+                    num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
             print(f"num_privileged_obs: {num_privileged_obs}")
         else:
             num_privileged_obs = num_obs

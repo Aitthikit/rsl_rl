@@ -233,8 +233,8 @@ class Distillation:
         # Get encoder configurations
         student_type = self.encoder_cfg.get("student_type", "mlp")  # Default to MLP if not specified
         teacher_type = self.encoder_cfg.get("teacher_type", "mlp")  # Default to MLP if not specified
-        student_output_dim = self.encoder_cfg.get("output_dim", 8)
-        teacher_output_dim = self.encoder_cfg.get("output_dim", 8)
+        student_output_dim = self.encoder_cfg.get("student_output_dim", 8)
+        teacher_output_dim = self.encoder_cfg.get("teacher_output_dim", 8)
         # Base parameters for both encoders
         student_params = {
             "input_dim": student_obs_shape,
